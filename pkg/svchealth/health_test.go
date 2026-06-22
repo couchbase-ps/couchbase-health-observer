@@ -42,6 +42,22 @@ func TestComputeNonCriticalServiceDownStaysUp(t *testing.T) {
 	}
 }
 
+func TestComputeOmitsNonDeployedService(t *testing.T) {
+	// A service with no deployed node yields a placeholder ping with an empty host;
+	// it must NOT appear in the report.
+	probes := []Probe{p("kv", "d1", true), p("kv", "d2", true), p("analytics", "", false)}
+	r := Compute(probes, []string{"kv"}, "t")
+	if _, ok := r.Services["analytics"]; ok {
+		t.Errorf("analytics (not deployed) should be omitted, got %+v", r.Services["analytics"])
+	}
+	if _, ok := r.Services["kv"]; !ok {
+		t.Error("kv should be present")
+	}
+	if r.Status != "UP" {
+		t.Fatalf("global = %s, want UP", r.Status)
+	}
+}
+
 func TestComputeNoProbesDown(t *testing.T) {
 	r := Compute(nil, []string{"kv"}, "t")
 	if r.Status != "DOWN" {

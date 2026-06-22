@@ -16,6 +16,9 @@ func Compute(probes []Probe, critical []string, checkedAt string) Report {
 	}
 	byService := map[string]*agg{}
 	for _, pr := range probes {
+		if pr.Host == "" {
+			continue // placeholder for a service with no deployed node; omit it
+		}
 		a := byService[pr.Service]
 		if a == nil {
 			a = &agg{}
