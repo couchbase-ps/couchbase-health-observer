@@ -8,7 +8,7 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - **Phase:** implementing the SDK per-service health detector (`pkg/svchealth`) from the plan.
 - **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
 - **Done:** repo bootstrap, compose, AGENTS/CLAUDE; Tasks 1-4 green (types, prober, Compute, gocb prober).
-- **Next:** Task 5 — `pkg/svchealth/api.go` (`Handler`: GET /health/couchbase, 503 on global DOWN else 200) + tests.
+- **Next:** Task 7 — integration test against `deploy/compose` (needs docker; the first step that touches a real cluster).
 
 ## Plan task checklist (SDK per-service)
 
@@ -17,7 +17,7 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - [x] Task 3: Compute (per-service rollup + critical-driven global) + tests
 - [x] Task 4: gocb Prober
 - [x] Task 5: HTTP handler (/health/couchbase, 503/200) + tests
-- [ ] Task 6: cmd/svchealthcheck server
+- [x] Task 6: cmd/svchealthcheck server
 - [ ] Task 7: integration test against deploy/compose
 
 ## Log
