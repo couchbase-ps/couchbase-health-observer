@@ -6,7 +6,20 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE="docker compose -f $HERE/../deploy/compose/docker-compose.yml"
 URL="http://localhost:8080/health/couchbase"
 
-status() { curl -s "$URL" | sed -n 's/.*"status":"\([A-Z]*\)".*/\1/p'; }
+# Global status only (top-level .status); jq avoids grabbing a per-service status.
+status() { curl -s "$URL" | jq -r '.status // empty' 2>/dev/null; }
+
+# Clean any prior run first so Docker releases its own forward of host port 8080.
+$COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+
+# Guard: with our stack down, ANY remaining listener on host 8080 is a stray host
+# process (e.g. a leftover `go run ./cmd/svchealthcheck` bound to localhost, which
+# cannot reach the internal node addresses and would answer the curls with DOWN).
+if lsof -nP -iTCP:8080 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "FAIL: a non-Docker process is listening on host port 8080 (kill it first):"
+  lsof -nP -iTCP:8080 -sTCP:LISTEN | grep -v COMMAND
+  exit 1
+fi
 
 echo "== bringing up cluster + observer (build) =="
 $COMPOSE up -d --build

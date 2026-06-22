@@ -111,6 +111,7 @@ services:
   observer:
     build:
       context: ../..
+    container_name: cb-observer
     depends_on:
       - couchbase-init
     networks:

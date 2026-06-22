@@ -8,7 +8,8 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - **Phase:** implementing the SDK per-service health detector (`pkg/svchealth`) from the plan.
 - **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
 - **Done:** repo bootstrap, compose, AGENTS/CLAUDE; Tasks 1-4 green (types, prober, Compute, gocb prober).
-- **Next:** Task 7 — integration test against `deploy/compose` (needs docker; the first step that touches a real cluster).
+- **Done:** SDK per-service detector COMPLETE (Tasks 1-7, e2e green). Observer deploys in compose and reports correct per-service / global health through auto-failover.
+- **Next:** wrap the branch; future phases (state machine + K8s actuator + active mode) are separate.
 
 ## Plan task checklist (SDK per-service)
 
@@ -18,16 +19,14 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - [x] Task 4: gocb Prober
 - [x] Task 5: HTTP handler (/health/couchbase, 503/200) + tests
 - [x] Task 6: cmd/svchealthcheck server
-- [~] Task 7: e2e — observer DEPLOYED into compose (Dockerfile + observer service), assert /health/couchbase over mapped port (host cannot reach internal nodes, so the app must run in-network)
+- [x] Task 7: e2e PASS (observer deployed in compose; UP -> kill node DOWN -> auto-failover UP)
 
 ## Log
 
 - 2026-06-19: repo bootstrapped on branch `observer-sdk-health`; module `github.com/couchbaselabs/couchbase-health-observer`; gocb added; compose harness copied from `couchbase-health-signal-lab` into `deploy/compose/`; AGENTS.md, CLAUDE.md, this handoff created.
 
-## OPEN BLOCKER (2026-06-22): compose-service observer reports DOWN
+## RESOLVED (2026-06-22): the "compose observer DOWN" was a host-port-8080 squatter
 
-- The observer **image and code are validated working**: run via `docker run --network compose_couchbase compose-observer ...` it reports `status=UP, kv reachable=3` reliably, in-network, against the healthy 5-node cluster.
-- The SAME image, SAME args, SAME network, run as the compose `observer` service, reports `status=DOWN, kv reachable=0` (SDK ping marks all KV endpoints unreachable). Confirmed simultaneously: a `docker run` instance UP while the compose instance DOWN.
-- Ruled out: image base (distroless/static & debian-slim fail standalone too; debian:12 works standalone), CGO on/off, args, network/DNS (getent + nc to all nodes OK from in-network), network alias, container_name/endpoint reuse, GOCB_VERBOSE, cluster health (5/5 active+healthy), deps re-run.
-- Root cause NOT yet found. Runtime image is debian:12. `cmd/svchealthcheck` has a `GOCB_VERBOSE=1` env toggle for SDK logging.
-- Next idea: diff verbose gocb logs between a working `docker run` and the failing compose service to find where the KV connection lifecycle to cb-data-2/3 diverges; or test launching observer outside compose for the e2e.
+Root cause: a leftover host process (a `go run ./cmd/svchealthcheck` bound to `couchbase://localhost`, which cannot reach the cluster's internal node addresses) was LISTENING on host port 8080 and intercepting every `curl localhost:8080`, always answering DOWN. The container / compose / image were correct throughout (distroless/static works fine). Fixes: killed the stray process; `test/e2e.sh` now (1) runs `compose down` first to release Docker's own 8080 forward, then guards against any remaining non-Docker listener on 8080, and (2) parses the GLOBAL status with `jq -r .status` instead of a greedy sed that grabbed the last per-service status. e2e now PASSES.
+
+Lesson for any agent: if the observer reports DOWN unexpectedly, check `lsof -nP -iTCP:8080 -sTCP:LISTEN` for a stray host process before debugging the SDK.
