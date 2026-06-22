@@ -26,7 +26,7 @@ spec:
             - --pass=password
             - --critical=kv
             - --interval=2s
-            - --failover-delay=15s
+            - --failover-delay=30s
             - --secondary-conn=couchbase://region-b-srv.region-b.svc
             - --namespace=default
             - --configmap=cb-conn

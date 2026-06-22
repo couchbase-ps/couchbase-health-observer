@@ -15,6 +15,12 @@ grep -q 'couchbase/operator:2.9.2' <<<"$REGION_A"
 grep -q 'helm.sh/chart: couchbase-operator-2.92.0' <<<"$REGION_A"
 grep -q 'kind: CouchbaseBucket' <<<"$REGION_A"
 grep -q 'name: observer$' <<<"$REGION_A"
+# region-a topology: 3 data + 2 index/query, short auto-failover, bucket replica 1
+grep -q 'autoFailoverTimeout: 5s' <<<"$REGION_A"
+grep -q 'autoFailoverMaxCount: 1' <<<"$REGION_A"
+grep -A3 'name: data' <<<"$REGION_A" | grep -q 'size: 3'
+grep -A4 'name: query' <<<"$REGION_A" | grep -q 'size: 2'
+grep -A8 'name: observer' <<<"$REGION_A" | grep -q 'replicas: 1'
 
 REGION_B="$(
   helm template region-b "$CHART" \
@@ -24,6 +30,10 @@ REGION_B="$(
 grep -q 'kind: Deployment' <<<"$REGION_B"
 grep -Eq 'kind: "?CouchbaseCluster"?' <<<"$REGION_B"
 grep -q 'name: region-b$' <<<"$REGION_B"
+# region-b is a single data node, no index/query group, bucket replica 0
+grep -A3 'name: data' <<<"$REGION_B" | grep -q 'size: 1'
+if grep -q 'name: query' <<<"$REGION_B"; then echo "FAIL: region-b should not have a query group"; exit 1; fi
+grep -A8 'name: observer' <<<"$REGION_B" | grep -q 'replicas: 0'
 
 kubectl kustomize "$ROOT/deploy/kind/mock-app" >/dev/null
 kubectl kustomize "$ROOT/deploy/kind/observer" >/dev/null

@@ -90,3 +90,23 @@ active-mode switch e2e now closes the final pending capability.
   `couchbase://region-b-srv.region-b.svc`; mock-app received a rollout restart
   and new pods logged the region-b connstring.
 - Run: `./test/e2e_switch.sh` (creates and deletes kind automatically).
+
+## Task 12 review hardening (2026-06-22): full failover scenarios on region-a
+
+Post-review (3 fixes; this is fix 2). region-a is now the realistic primary so the
+e2e exercises the auto-failover-absorption path, matching the docker e2e:
+
+- region-a topology: 3 data + 2 index/query nodes, bucket replica 1,
+  `autoFailoverTimeout: 5s`, `autoFailoverMaxCount: 1` (values.yaml). region-b
+  stays a single data node, no index/query, bucket replica 0 (region-b-values.yaml).
+- observer `--failover-delay=30s` (clear margin over the 5s server auto-failover).
+- e2e two scenarios: A) kill ONE region-a node -> Couchbase auto-failover absorbs it
+  inside FailoverDelay -> observer must NOT switch (asserted ~45s); B) kill the rest
+  -> sustained DOWN -> switch to region-b + mock-app rollout.
+- Webhook retry guard broadened: retry on ANY `failed calling webhook` (the cold-node
+  race shows up as `connection refused` AND `context deadline exceeded`); only a real
+  `denied the request` validation fails fast.
+- region-a Available/Ready waits bumped 10m -> 20m: 5-node bring-up + rebalance on
+  kind exceeds 10m (the earlier 10m timeout, not a resource limit — all 5 pods schedule).
+- Live e2e PASS: scenario A no-switch confirmed, scenario B switched cb-conn to
+  region-b and rolled mock-app.

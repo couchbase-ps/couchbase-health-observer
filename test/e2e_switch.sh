@@ -52,11 +52,16 @@ install_region() {
     fi
 
     printf '%s\n' "$output"
-    if [[ "$output" != *"failed calling webhook"* || "$output" != *"connect: connection refused"* ]]; then
+    # The official chart races on a cold node: the admission webhook is registered
+    # before its pod can serve traffic, so the first create fails to *call* the
+    # webhook (connection refused / context deadline exceeded / no endpoints). Retry
+    # only those; a genuine validation rejection ("admission webhook ... denied the
+    # request") has a different message and must fail fast.
+    if [[ "$output" != *"failed calling webhook"* ]]; then
       return 1
     fi
     if [[ "$attempt" == "3" ]]; then
-      echo "FAIL: admission webhook still refused connections after 3 Helm attempts"
+      echo "FAIL: admission webhook still not serving after 3 Helm attempts"
       return 1
     fi
 
@@ -86,9 +91,11 @@ install_region region-b
 
 for region in region-a region-b; do
   echo "waiting for $region..."
-  kubectl wait --for=condition=Available --timeout=10m \
+  # region-a brings up 5 nodes that the operator adds and rebalances; on kind that
+  # can take well past 10m, so allow generous headroom.
+  kubectl wait --for=condition=Available --timeout=20m \
     --namespace "$region" "couchbasecluster/$region"
-  kubectl wait --for=condition=Ready --timeout=5m \
+  kubectl wait --for=condition=Ready --timeout=20m \
     --namespace "$region" "pod" -l "couchbase_cluster=$region"
 done
 
@@ -103,10 +110,38 @@ BASELINE="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
   echo "FAIL: unexpected baseline connstring: $BASELINE"
   exit 1
 }
+echo "baseline OK: cb-conn=$BASELINE"
 
-echo "== hold region-a down past FailoverDelay =="
+# Pause the operator so deleted pods are NOT rescheduled; the surviving Couchbase
+# nodes are what react (auto-failover, then full outage), exactly as in production.
+echo "== pause region-a operator reconciliation =="
 kubectl patch couchbasecluster region-a --namespace region-a \
   --type=merge -p '{"spec":{"paused":true}}'
+
+# Scenario A: lose ONE region-a node. With 5 nodes + replica 1 and a 5s
+# auto-failover timeout, Couchbase absorbs it well inside the 30s FailoverDelay,
+# so the observer must NOT switch. Mirrors the docker e2e transient-DOWN path.
+echo "== scenario A: single-node loss absorbed by auto-failover, expect NO switch =="
+VICTIM="$(kubectl get pods --namespace region-a -l couchbase_cluster=region-a \
+  -o jsonpath='{.items[0].metadata.name}')"
+echo "killing one node: $VICTIM"
+kubectl delete pod "$VICTIM" --namespace region-a --force --grace-period=0
+
+echo "asserting cb-conn stays region-a for ~45s (> FailoverDelay)..."
+for _ in $(seq 1 22); do
+  CUR="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
+  [[ "$CUR" == "couchbase://region-a-srv.region-a.svc" ]] || {
+    echo "FAIL: observer switched on an absorbed single-node loss (cb-conn=$CUR)"
+    kubectl logs deployment/observer --tail=100 || true
+    exit 1
+  }
+  sleep 2
+done
+echo "scenario A OK: no switch, auto-failover absorbed the node"
+
+# Scenario B: take the rest of region-a down. KV is now unreachable and stays
+# DOWN past FailoverDelay, so the observer switches to region-b and rolls the app.
+echo "== scenario B: full region-a outage, expect switch to region-b =="
 kubectl delete pod --namespace region-a -l couchbase_cluster=region-a \
   --force --grace-period=0
 
