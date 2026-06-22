@@ -1,0 +1,5 @@
+/bin/
+*.out
+.env
+.idea/
+.DS_Store

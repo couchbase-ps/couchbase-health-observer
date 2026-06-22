@@ -1,0 +1,120 @@
+services:
+  cb-data-1:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-data-1
+    hostname: cb-data-1.local
+    cap_add: ["NET_ADMIN"]
+    networks:
+      couchbase:
+        aliases:
+          - cb-data-1
+          - cb-data-1.local
+    ports:
+      - "8091-8097:8091-8097"
+      - "9123:9123"
+      - "11207:11207"
+      - "11210:11210"
+      - "18091-18097:18091-18097"
+    volumes:
+      - cb-data-1:/opt/couchbase/var
+
+  cb-data-2:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-data-2
+    hostname: cb-data-2.local
+    cap_add: ["NET_ADMIN"]
+    networks:
+      couchbase:
+        aliases:
+          - cb-data-2
+          - cb-data-2.local
+    ports:
+      - "9002:8091"
+    volumes:
+      - cb-data-2:/opt/couchbase/var
+
+  cb-data-3:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-data-3
+    hostname: cb-data-3.local
+    cap_add: ["NET_ADMIN"]
+    networks:
+      couchbase:
+        aliases:
+          - cb-data-3
+          - cb-data-3.local
+    ports:
+      - "9003:8091"
+    volumes:
+      - cb-data-3:/opt/couchbase/var
+
+  cb-index-query-1:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-index-query-1
+    hostname: cb-index-query-1.local
+    cap_add: ["NET_ADMIN"]
+    networks:
+      couchbase:
+        aliases:
+          - cb-index-query-1
+          - cb-index-query-1.local
+    ports:
+      - "9004:8091"
+    volumes:
+      - cb-index-query-1:/opt/couchbase/var
+
+  cb-index-query-2:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-index-query-2
+    hostname: cb-index-query-2.local
+    cap_add: ["NET_ADMIN"]
+    networks:
+      couchbase:
+        aliases:
+          - cb-index-query-2
+          - cb-index-query-2.local
+    ports:
+      - "9005:8091"
+    volumes:
+      - cb-index-query-2:/opt/couchbase/var
+
+  couchbase-init:
+    image: couchbase:enterprise-8.0.1
+    container_name: couchbase-init
+    depends_on:
+      - cb-data-1
+      - cb-data-2
+      - cb-data-3
+      - cb-index-query-1
+      - cb-index-query-2
+    networks:
+      - couchbase
+    environment:
+      COUCHBASE_USERNAME: Administrator
+      COUCHBASE_PASSWORD: password
+      COUCHBASE_RAM_SIZE_MB: 4096
+      COUCHBASE_INDEX_RAM_SIZE_MB: 1024
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/bash", "/scripts/init-cluster.sh"]
+    restart: "no"
+
+  cb-tools:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-tools
+    depends_on:
+      - couchbase-init
+    networks:
+      - couchbase
+    entrypoint: ["sleep", "infinity"]
+
+networks:
+  couchbase:
+    driver: bridge
+
+volumes:
+  cb-data-1:
+  cb-data-2:
+  cb-data-3:
+  cb-index-query-1:
+  cb-index-query-2:
