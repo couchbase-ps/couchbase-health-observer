@@ -23,3 +23,11 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 ## Log
 
 - 2026-06-19: repo bootstrapped on branch `observer-sdk-health`; module `github.com/couchbaselabs/couchbase-health-observer`; gocb added; compose harness copied from `couchbase-health-signal-lab` into `deploy/compose/`; AGENTS.md, CLAUDE.md, this handoff created.
+
+## OPEN BLOCKER (2026-06-22): compose-service observer reports DOWN
+
+- The observer **image and code are validated working**: run via `docker run --network compose_couchbase compose-observer ...` it reports `status=UP, kv reachable=3` reliably, in-network, against the healthy 5-node cluster.
+- The SAME image, SAME args, SAME network, run as the compose `observer` service, reports `status=DOWN, kv reachable=0` (SDK ping marks all KV endpoints unreachable). Confirmed simultaneously: a `docker run` instance UP while the compose instance DOWN.
+- Ruled out: image base (distroless/static & debian-slim fail standalone too; debian:12 works standalone), CGO on/off, args, network/DNS (getent + nc to all nodes OK from in-network), network alias, container_name/endpoint reuse, GOCB_VERBOSE, cluster health (5/5 active+healthy), deps re-run.
+- Root cause NOT yet found. Runtime image is debian:12. `cmd/svchealthcheck` has a `GOCB_VERBOSE=1` env toggle for SDK logging.
+- Next idea: diff verbose gocb logs between a working `docker run` and the failing compose service to find where the KV connection lifecycle to cb-data-2/3 diverges; or test launching observer outside compose for the e2e.

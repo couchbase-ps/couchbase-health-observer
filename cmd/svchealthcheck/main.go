@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,10 @@ func main() {
 	critical := flag.String("critical", "kv", "comma-separated critical services")
 	addr := flag.String("addr", ":8080", "listen address")
 	flag.Parse()
+
+	if os.Getenv("GOCB_VERBOSE") != "" {
+		gocb.SetLogger(gocb.VerboseStdioLogger())
+	}
 
 	cluster, err := gocb.Connect(*conn, gocb.ClusterOptions{
 		Authenticator: gocb.PasswordAuthenticator{Username: *user, Password: *pass},
