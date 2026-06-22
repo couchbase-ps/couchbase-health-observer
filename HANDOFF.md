@@ -8,9 +8,9 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - **Phase:** Observer implementation plan complete through Task 12.
 - **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
 - **Done:** repo bootstrap, compose, AGENTS/CLAUDE; Tasks 1-4 green (types, prober, Compute, gocb prober).
-- **Done:** SDK per-service detector COMPLETE (Tasks 1-7, e2e green). Observer deploys in compose and reports correct per-service / global health through auto-failover.
+- **Done:** SDK per-service detector COMPLETE (Tasks 1-7, e2e green). Observer deploys in compose, reports correct per-service / global health through auto-failover.
 - **Done:** failover actuation COMPLETE (state machine, Kubernetes actuator, active mode).
-- **Done:** Observer implementation plan Task 12 COMPLETE (kind + official Helm + live region switch e2e).
+- **Done:** Task 12 COMPLETE (kind + official Helm + live region switch e2e).
 - **Next:** integrate `observer-kind-switch-e2e`; the Observer implementation plan has no pending tasks.
 
 ## Plan task checklist (SDK per-service)
@@ -29,7 +29,7 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 
 ## RESOLVED (2026-06-22): the "compose observer DOWN" was a host-port-8080 squatter
 
-Root cause: a leftover host process (a `go run ./cmd/svchealthcheck` bound to `couchbase://localhost`, which cannot reach the cluster's internal node addresses) was LISTENING on host port 8080 and intercepting every `curl localhost:8080`, always answering DOWN. The container / compose / image were correct throughout (distroless/static works fine). Fixes: killed the stray process; `test/e2e.sh` now (1) runs `compose down` first to release Docker's own 8080 forward, then guards against any remaining non-Docker listener on 8080, and (2) parses the GLOBAL status with `jq -r .status` instead of a greedy sed that grabbed the last per-service status. e2e now PASSES.
+Root cause: a leftover host process (a `go run ./cmd/svchealthcheck` bound to `couchbase://localhost`, which cannot reach the cluster's internal node addresses) was LISTENING on host port 8080, intercepting every `curl localhost:8080`, always answering DOWN. Container / compose / image were correct throughout (distroless/static works fine). Fixes: killed the stray process; `test/e2e.sh` now (1) runs `compose down` first to release Docker's own 8080 forward, then guards against any remaining non-Docker listener on 8080, and (2) parses the GLOBAL status with `jq -r .status` instead of a greedy sed that grabbed the last per-service status. e2e now PASSES.
 
 Lesson for any agent: if the observer reports DOWN unexpectedly, check `lsof -nP -iTCP:8080 -sTCP:LISTEN` for a stray host process before debugging the SDK.
 
@@ -44,12 +44,12 @@ Build the active path on top of the svchealth detector:
 
 state machine + actuator + active-mode wiring done, all unit-tested, build green.
 
-The previously deferred live active-mode switch e2e is complete in Task 12 below.
-The compose harness remains the detector e2e; kind owns the Kubernetes actuation e2e.
+Previously deferred live active-mode switch e2e is complete in Task 12 below.
+Compose harness remains the detector e2e; kind owns the Kubernetes actuation e2e.
 
 ## Mapping to the Observer implementation plan (20260617)
 
-We implemented health via the **SDK per-service plan (20260619)**, not this plan's
+Implemented health via the **SDK per-service plan (20260619)**, not this plan's
 membership/strategy detection core. So several tasks were superseded, not done verbatim.
 
 | Task | Status |
@@ -68,7 +68,7 @@ membership/strategy detection core. So several tasks were superseded, not done v
 | 11 Compose e2e driver | done (test/e2e.sh) |
 | 12 Kubernetes switch e2e (kind + CAO) | done |
 
-Net: the membership/strategy detection (Tasks 1/4/5) was replaced by the SDK per-service
+Net: membership/strategy detection (Tasks 1/4/5) replaced by the SDK per-service
 detector by design; the spike (3) lives in the signal-lab; the live kind+CAO
 active-mode switch e2e now closes the final pending capability.
 

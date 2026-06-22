@@ -1,23 +1,23 @@
 # couchbase-health-observer — Agent Guide
 
-Read this first. It is the single source of truth for working in this repo so you do not have to read everything. Keep it current when you change structure, conventions, or scope.
+Read first. Single source of truth for this repo, so you skip reading everything. Keep current when structure, conventions, or scope change.
 
 ## What this project is
 
-An **Observer** for Couchbase that detects cluster health and (in later phases) drives automated multi-region failover. Built for the Emirates **MCA replacement** engagement.
+**Observer** for Couchbase. Detects cluster health and (later phases) drives automated multi-region failover. Built for Emirates **MCA replacement** engagement.
 
-Health detection has two possible signal paths (see the durable wiki page "Cluster Health Signal Detection"):
-- **SDK per-service** (`pkg/svchealth`) — SDK `ping()` reachability per service, global = worst of the app's *critical* services. **This is the path being implemented now.**
+Health detection has two signal paths (see durable wiki "Cluster Health Signal Detection"):
+- **SDK per-service** (`pkg/svchealth`) — SDK `ping()` reachability per service, global = worst of app's *critical* services. **Path being implemented now.**
 - **Cluster-API** (`pkg/clusterhealth`) — REST `/pools/default` + quorum-majority aggregation (UP/DEGRADED/DOWN). Sibling detector, **not yet implemented**.
 
-The full Observer (later phases): health detector → anti-flap state machine (`FailoverDelay`) → REST `/health` API (`observe` mode) → Kubernetes actuator (ConfigMap connstring swap + `rollout restart`) → `active` mode. Failover automated, **failback manual**.
+Full Observer (later phases): health detector → anti-flap state machine (`FailoverDelay`) → REST `/health` API (`observe` mode) → Kubernetes actuator (ConfigMap connstring swap + `rollout restart`) → `active` mode. Failover automated, **failback manual**.
 
 ## Health model (SDK path)
 
-- A service is **DOWN if any of its endpoints is unreachable**, **UP** only if all reachable. After auto-failover a node vanishes from the cluster map, so ping reads UP (cluster absorbed it).
-- **Global** status = `DOWN if any critical service is DOWN, else UP`. `critical` is per-app config (e.g. `["kv"]` or `["kv","query"]`). Non-critical services still appear in the JSON for observability.
-- No `DEGRADED` in the SDK path (the SDK cannot see failover state). The "don't react to transient blips" behaviour lives in the **consumer** (a delay / `FailoverDelay`), not in the health snapshot.
-- Endpoint `/health/couchbase` returns the detailed JSON report; HTTP 503 when global is DOWN, else 200.
+- Service **DOWN if any endpoint unreachable**, **UP** only if all reachable. After auto-failover a node vanishes from cluster map, so ping reads UP (cluster absorbed it).
+- **Global** = `DOWN if any critical service DOWN, else UP`. `critical` is per-app config (e.g. `["kv"]` or `["kv","query"]`). Non-critical services still appear in JSON for observability.
+- No `DEGRADED` in SDK path (SDK cannot see failover state). "Don't react to transient blips" lives in the **consumer** (a delay / `FailoverDelay`), not in the health snapshot.
+- Endpoint `/health/couchbase` returns detailed JSON report; HTTP 503 when global DOWN, else 200.
 
 ## Layout
 
@@ -34,18 +34,19 @@ HANDOFF.md            running progress log — READ THIS to see what is done and
 ## Conventions
 
 - Go 1.22+, module `github.com/couchbaselabs/couchbase-health-observer`.
-- **TDD**: write the failing test first, run it red, implement, run it green, commit. Small focused files, one responsibility each.
+- **TDD**: failing test first, run red, implement, run green, commit. Small focused files, one responsibility each.
 - Dependencies behind **interfaces** with mocks (e.g. `Prober`) so logic is unit-testable without a cluster.
 - **Frequent commits**, one logical step each. **Rebase, never merge** (linear history).
-- Integration tests are build-tagged `//go:build integration` and need the compose cluster up.
+- Integration tests build-tagged `//go:build integration`, need compose cluster up.
+- **Docs stay compressed.** `AGENTS.md`, `CLAUDE.md`, `HANDOFF.md` maintained in caveman-speak (terse, articles/filler dropped, code/commands/paths/tables exact). After editing any of them, recompress: `/caveman:compress <file>` if the caveman skill is available, else compress inline by hand. No `.original.md` backups — git is the history.
 
 ## Workflow
 
 - Work on a **feature branch**, never directly on `main`. Integrate by **rebase, never merge** (linear history).
-- The authoritative spec is the plan + design in the Obsidian vault (paths below). Treat the SDK per-service plan as the spec for the health detector.
-- **Per step:** write the failing test, run it red, implement the minimum, run it green, then **update `HANDOFF.md`**, **commit** (one logical step), and report what was done and how to verify it before moving on.
-- Do not implement many steps in one go; keep each step independently testable and validated.
-- If the **superpowers** skills are installed, drive the work with them: `executing-plans` (or `subagent-driven-development`) to execute the plan task-by-task, `test-driven-development` per unit, and `finishing-a-development-branch` when a phase completes.
+- Authoritative spec is the plan + design in the Obsidian vault (paths below). Treat SDK per-service plan as spec for the health detector.
+- **Per step:** failing test, run red, implement minimum, run green, then **update `HANDOFF.md`**, **commit** (one logical step), report what was done and how to verify before moving on.
+- Don't implement many steps at once; keep each step independently testable and validated.
+- If **superpowers** skills installed, drive work with them: `executing-plans` (or `subagent-driven-development`) to execute the plan task-by-task, `test-driven-development` per unit, `finishing-a-development-branch` when a phase completes.
 
 ## Build, test, run
 
@@ -65,4 +66,4 @@ go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve
 
 ## Continuing the work
 
-Read **HANDOFF.md** for the current state and the exact next step. Update it as you finish each step.
+Read **HANDOFF.md** for current state and exact next step. Update it as you finish each step.
