@@ -108,6 +108,24 @@ services:
       - couchbase
     entrypoint: ["sleep", "infinity"]
 
+  observer:
+    build:
+      context: ../..
+    container_name: cb-observer
+    depends_on:
+      - couchbase-init
+    networks:
+      - couchbase
+    ports:
+      - "8080:8080"
+    command:
+      - "--conn=couchbase://cb-data-1.local"
+      - "--bucket=travel-sample"
+      - "--user=Administrator"
+      - "--pass=password"
+      - "--critical=kv"
+      - "--addr=:8080"
+
 networks:
   couchbase:
     driver: bridge

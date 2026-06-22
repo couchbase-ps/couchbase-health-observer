@@ -18,7 +18,7 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - [x] Task 4: gocb Prober
 - [x] Task 5: HTTP handler (/health/couchbase, 503/200) + tests
 - [x] Task 6: cmd/svchealthcheck server
-- [ ] Task 7: integration test against deploy/compose
+- [~] Task 7: e2e — observer DEPLOYED into compose (Dockerfile + observer service), assert /health/couchbase over mapped port (host cannot reach internal nodes, so the app must run in-network)
 
 ## Log
 
