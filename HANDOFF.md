@@ -7,12 +7,12 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - **Branch:** `observer-sdk-health`
 - **Phase:** implementing the SDK per-service health detector (`pkg/svchealth`) from the plan.
 - **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
-- **Done:** repo bootstrap (go module, dirs), compose harness copied to `deploy/compose/`, AGENTS.md + CLAUDE.md.
-- **Next:** Task 1 — `pkg/svchealth/types.go` (Report, ServiceHealth) + JSON-shape test.
+- **Done:** repo bootstrap, compose harness copied, AGENTS.md + CLAUDE.md; Task 1 (types) green.
+- **Next:** Task 2 — `pkg/svchealth/prober.go` (Prober interface + Probe + MockProber).
 
 ## Plan task checklist (SDK per-service)
 
-- [ ] Task 1: types (Report, ServiceHealth) + JSON shape test
+- [x] Task 1: types (Report, ServiceHealth) + JSON shape test
 - [ ] Task 2: Prober interface + Mock + Probe
 - [ ] Task 3: Compute (per-service rollup + critical-driven global) + tests
 - [ ] Task 4: gocb Prober
