@@ -1,0 +1,35 @@
+couchbase-operator:
+  install:
+    couchbaseOperator: true
+    admissionController: true
+    couchbaseCluster: true
+    syncGateway: false
+
+  couchbaseOperator:
+    scope: Role
+
+  buckets:
+    default: null
+    observer:
+      memoryQuota: 100Mi
+      replicas: 0
+      storageBackend: couchstore
+
+  cluster:
+    name: region-a
+    image: couchbase/server:8.0.1
+    antiAffinity: false
+    security:
+      username: Administrator
+      password: password
+    buckets:
+      managed: true
+    cluster:
+      dataServiceMemoryQuota: 256Mi
+      autoFailoverTimeout: 120s
+    servers:
+      default: null
+      data:
+        size: 1
+        services:
+          - data

@@ -4,12 +4,14 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 
 ## State
 
-- **Branch:** `main` (SDK per-service phase merged; was `observer-sdk-health`)
-- **Phase:** implementing the SDK per-service health detector (`pkg/svchealth`) from the plan.
+- **Branch:** `observer-kind-switch-e2e`
+- **Phase:** Observer implementation plan complete through Task 12.
 - **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
 - **Done:** repo bootstrap, compose, AGENTS/CLAUDE; Tasks 1-4 green (types, prober, Compute, gocb prober).
 - **Done:** SDK per-service detector COMPLETE (Tasks 1-7, e2e green). Observer deploys in compose and reports correct per-service / global health through auto-failover.
-- **Next:** wrap the branch; future phases (state machine + K8s actuator + active mode) are separate.
+- **Done:** failover actuation COMPLETE (state machine, Kubernetes actuator, active mode).
+- **Done:** Observer implementation plan Task 12 COMPLETE (kind + official Helm + live region switch e2e).
+- **Next:** integrate `observer-kind-switch-e2e`; the Observer implementation plan has no pending tasks.
 
 ## Plan task checklist (SDK per-service)
 
@@ -42,13 +44,8 @@ Build the active path on top of the svchealth detector:
 
 state machine + actuator + active-mode wiring done, all unit-tested, build green.
 
-DEFERRED follow-up (own phase): live active-mode switch e2e. Needs the real two-environment
-topology — a Couchbase cluster PLUS a Kubernetes cluster (kind) holding the `cb-conn`
-ConfigMap + a dependent Deployment, with the observer (active mode) able to reach both.
-Steps: kind up; create ConfigMap + dummy Deployment; deploy observer active (--dry-run first);
-kill CB data nodes; confirm sustained DOWN past FailoverDelay -> ConfigMap connstring swapped
-+ Deployment rolled. The single-cluster compose harness cannot exercise the actuator (no K8s
-objects to switch).
+The previously deferred live active-mode switch e2e is complete in Task 12 below.
+The compose harness remains the detector e2e; kind owns the Kubernetes actuation e2e.
 
 ## Mapping to the Observer implementation plan (20260617)
 
@@ -69,9 +66,27 @@ membership/strategy detection core. So several tasks were superseded, not done v
 | 9 Active mode wiring | done (cmd active mode) |
 | 10 Dockerfile + image | done |
 | 11 Compose e2e driver | done (test/e2e.sh) |
-| 12 Kubernetes switch e2e (kind + CAO) | NOT DONE (deferred; the only pending capability) |
+| 12 Kubernetes switch e2e (kind + CAO) | done |
 
 Net: the membership/strategy detection (Tasks 1/4/5) was replaced by the SDK per-service
-detector by design; the spike (3) lives in the signal-lab; the one genuinely-pending
-capability against this plan is Task 12 — the live kind+CAO active-mode switch e2e
-(see the DEFERRED note above for the steps).
+detector by design; the spike (3) lives in the signal-lab; the live kind+CAO
+active-mode switch e2e now closes the final pending capability.
+
+## Task 12 complete (2026-06-22): kind + official Helm region switch
+
+- kind only; no dependency on OrbStack Kubernetes.
+- Dependency-only wrapper chart, following the `cao-eviction-reschedule-hook`
+  example; no custom Couchbase resource templates.
+- Pinned official versions: Helm chart `2.92.0`, CAO `2.9.2`, Couchbase Server
+  `8.0.1`.
+- `region-a` and `region-b` are separate namespaces. Each is one Helm release
+  containing CAO, the admission controller, and its `CouchbaseCluster`.
+- Fresh kind nodes expose an official-chart startup race: the validating webhook
+  is registered while its image is still pulling, so the first cluster create
+  can get `connect: connection refused`. The e2e retries only that exact failure,
+  at most three Helm attempts, after waiting for the admission Deployment.
+- Live e2e PASS: primary initially UP; region-a paused and its data pod deleted;
+  sustained DOWN exceeded `15s`; observer changed `cb-conn` to
+  `couchbase://region-b-srv.region-b.svc`; mock-app received a rollout restart
+  and new pods logged the region-b connstring.
+- Run: `./test/e2e_switch.sh` (creates and deletes kind automatically).

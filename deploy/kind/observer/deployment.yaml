@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observer
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: observer
+  template:
+    metadata:
+      labels:
+        app: observer
+    spec:
+      serviceAccountName: observer
+      containers:
+        - name: observer
+          image: couchbase-health-observer:dev
+          imagePullPolicy: Never
+          args:
+            - --mode=active
+            - --conn=couchbase://region-a-srv.region-a.svc
+            - --bucket=observer
+            - --user=Administrator
+            - --pass=password
+            - --critical=kv
+            - --interval=2s
+            - --failover-delay=15s
+            - --secondary-conn=couchbase://region-b-srv.region-b.svc
+            - --namespace=default
+            - --configmap=cb-conn
+            - --config-key=connstring
+            - --deployments=mock-app
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5

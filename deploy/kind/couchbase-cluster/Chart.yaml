@@ -1,0 +1,11 @@
+apiVersion: v2
+name: couchbase-health-observer-cluster
+description: Official Couchbase Helm chart values for the observer kind e2e
+type: application
+version: 0.1.0
+appVersion: "2.9.2"
+
+dependencies:
+  - name: couchbase-operator
+    version: 2.92.0
+    repository: https://couchbase-partners.github.io/helm-charts/

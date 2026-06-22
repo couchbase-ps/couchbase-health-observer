@@ -25,6 +25,8 @@ The full Observer (later phases): health detector → anti-flap state machine (`
 pkg/svchealth/        SDK per-service health detector (types, prober, Compute, HTTP handler)
 cmd/svchealthcheck/   server exposing /health/couchbase
 deploy/compose/       5-node Couchbase EE 8.0.1 harness (copied from couchbase-health-signal-lab) for integration tests
+deploy/kind/          repeatable kind + official Couchbase Helm switch e2e
+test/e2e_switch.sh    Task 12 active-mode region-switch validation
 docs/                 (reserved)
 HANDOFF.md            running progress log — READ THIS to see what is done and what is next
 ```

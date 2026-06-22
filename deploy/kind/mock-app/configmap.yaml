@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cb-conn
+  namespace: default
+data:
+  connstring: couchbase://region-a-srv.region-a.svc
