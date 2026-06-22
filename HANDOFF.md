@@ -49,3 +49,29 @@ Steps: kind up; create ConfigMap + dummy Deployment; deploy observer active (--d
 kill CB data nodes; confirm sustained DOWN past FailoverDelay -> ConfigMap connstring swapped
 + Deployment rolled. The single-cluster compose harness cannot exercise the actuator (no K8s
 objects to switch).
+
+## Mapping to the Observer implementation plan (20260617)
+
+We implemented health via the **SDK per-service plan (20260619)**, not this plan's
+membership/strategy detection core. So several tasks were superseded, not done verbatim.
+
+| Task | Status |
+|---|---|
+| 0 Project bootstrap | done |
+| 1 Core domain types (State/ClusterSnapshot/Policy) | SUPERSEDED by svchealth types (Report/ServiceHealth/Probe) |
+| 2 Docker Compose CB harness | done (copied from couchbase-health-signal-lab) |
+| 3 Signal-reliability spike | done earlier as the separate couchbase-health-signal-lab repo |
+| 4 Health strategies (AutoFailover/ExpectedCount, UP/DEGRADED/DOWN) | SUPERSEDED by svchealth.Compute (per-service UP/DOWN) |
+| 5 Collector (gocb ping + REST auto-failover) | PARTIAL: GocbProber does ping; REST/membership half intentionally absent in the SDK path |
+| 6 State machine (FailoverDelay) | done (pkg/state) |
+| 7 REST API + observe mode | done (/health/couchbase) |
+| 8 Actuator (K8s) | done (pkg/actuator) |
+| 9 Active mode wiring | done (cmd active mode) |
+| 10 Dockerfile + image | done |
+| 11 Compose e2e driver | done (test/e2e.sh) |
+| 12 Kubernetes switch e2e (kind + CAO) | NOT DONE (deferred; the only pending capability) |
+
+Net: the membership/strategy detection (Tasks 1/4/5) was replaced by the SDK per-service
+detector by design; the spike (3) lives in the signal-lab; the one genuinely-pending
+capability against this plan is Task 12 — the live kind+CAO active-mode switch e2e
+(see the DEFERRED note above for the steps).
