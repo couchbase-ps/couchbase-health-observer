@@ -36,4 +36,4 @@ Lesson for any agent: if the observer reports DOWN unexpectedly, check `lsof -nP
 Build the active path on top of the svchealth detector:
 - [x] state machine (`pkg/state`): sustained-DOWN FailoverDelay, reset on healthy, fires once, no auto-failback
 - [x] actuator (`pkg/actuator`): ConfigMap swap + rollout-restart, idempotent, dry-run, fake-clientset tested
-- [ ] active mode: poll loop wiring detector -> state machine -> actuator; observe vs active modes.
+- [x] active mode: poll loop wiring detector -> state machine -> actuator; observe vs active; KUBECONFIG/in-cluster; dry-run
