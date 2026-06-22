@@ -16,7 +16,7 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 - [x] Task 2: Prober interface + Mock + Probe
 - [x] Task 3: Compute (per-service rollup + critical-driven global) + tests
 - [x] Task 4: gocb Prober
-- [ ] Task 5: HTTP handler (/health/couchbase, 503/200) + tests
+- [x] Task 5: HTTP handler (/health/couchbase, 503/200) + tests
 - [ ] Task 6: cmd/svchealthcheck server
 - [ ] Task 7: integration test against deploy/compose
 
