@@ -37,6 +37,14 @@ HANDOFF.md            running progress log — READ THIS to see what is done and
 - **Frequent commits**, one logical step each. **Rebase, never merge** (linear history).
 - Integration tests are build-tagged `//go:build integration` and need the compose cluster up.
 
+## Workflow
+
+- Work on a **feature branch**, never directly on `main`. Integrate by **rebase, never merge** (linear history).
+- The authoritative spec is the plan + design in the Obsidian vault (paths below). Treat the SDK per-service plan as the spec for the health detector.
+- **Per step:** write the failing test, run it red, implement the minimum, run it green, then **update `HANDOFF.md`**, **commit** (one logical step), and report what was done and how to verify it before moving on.
+- Do not implement many steps in one go; keep each step independently testable and validated.
+- If the **superpowers** skills are installed, drive the work with them: `executing-plans` (or `subagent-driven-development`) to execute the plan task-by-task, `test-driven-development` per unit, and `finishing-a-development-branch` when a phase completes.
+
 ## Build, test, run
 
 ```bash
