@@ -6,7 +6,11 @@ CHART="$ROOT/deploy/kind/couchbase-cluster"
 
 helm dependency build "$CHART" >/dev/null
 
-REGION_A="$(helm template region-a "$CHART" --namespace region-a)"
+REGION_A="$(
+  helm template region-a "$CHART" \
+    --namespace region-a \
+    --values "$CHART/region-a-values.yaml"
+)"
 grep -q 'kind: Deployment' <<<"$REGION_A"
 grep -Eq 'kind: "?CouchbaseCluster"?' <<<"$REGION_A"
 grep -q 'name: region-a$' <<<"$REGION_A"
@@ -15,9 +19,11 @@ grep -q 'couchbase/operator:2.9.2' <<<"$REGION_A"
 grep -q 'helm.sh/chart: couchbase-operator-2.92.0' <<<"$REGION_A"
 grep -q 'kind: CouchbaseBucket' <<<"$REGION_A"
 grep -q 'name: observer$' <<<"$REGION_A"
-# region-a topology: 3 data + 2 index/query, short auto-failover, bucket replica 1
+# region-a topology: 3 data + 2 index/query, short auto-failover, bucket replica 1,
+# operator-computed pod resources
 grep -q 'autoFailoverTimeout: 5s' <<<"$REGION_A"
 grep -q 'autoFailoverMaxCount: 1' <<<"$REGION_A"
+grep -A4 'autoResourceAllocation' <<<"$REGION_A" | grep -q 'enabled: true'
 grep -A3 'name: data' <<<"$REGION_A" | grep -q 'size: 3'
 grep -A4 'name: query' <<<"$REGION_A" | grep -q 'size: 2'
 grep -A8 'name: observer' <<<"$REGION_A" | grep -q 'replicas: 1'
@@ -27,6 +33,8 @@ REGION_B="$(
     --namespace region-b \
     --values "$CHART/region-b-values.yaml"
 )"
+# common values still apply to region-b
+grep -A4 'autoResourceAllocation' <<<"$REGION_B" | grep -q 'enabled: true'
 grep -q 'kind: Deployment' <<<"$REGION_B"
 grep -Eq 'kind: "?CouchbaseCluster"?' <<<"$REGION_B"
 grep -q 'name: region-b$' <<<"$REGION_B"

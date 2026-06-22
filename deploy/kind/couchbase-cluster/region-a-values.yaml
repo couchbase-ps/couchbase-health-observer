@@ -1,0 +1,17 @@
+# region-a: the primary we exercise. 3 data nodes + 2 index/query nodes; bucket
+# replica 1 (inherited from values.yaml) so a single-node loss is absorbed by
+# Couchbase auto-failover. Layered on top of values.yaml.
+couchbase-operator:
+  cluster:
+    name: region-a
+    servers:
+      default: null
+      data:
+        size: 3
+        services:
+          - data
+      query:
+        size: 2
+        services:
+          - index
+          - query

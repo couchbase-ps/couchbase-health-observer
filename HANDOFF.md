@@ -111,6 +111,19 @@ e2e exercises the auto-failover-absorption path, matching the docker e2e:
 - Live e2e PASS: scenario A no-switch confirmed, scenario B switched cb-conn to
   region-b and rolled mock-app.
 
+## Task 12 chart layout (2026-06-22): split common + per-region values
+
+Readability refactor. `deploy/kind/couchbase-cluster` values are now three files:
+- `values.yaml`: common base (install flags, image, security, bucket, auto-failover,
+  `autoResourceAllocation.enabled: true` with `cpuRequests: 0.25` / `cpuLimits: 1`).
+- `region-a-values.yaml`: name region-a + 3 data + 2 index/query servers.
+- `region-b-values.yaml`: name region-b + single data node + bucket replica 0.
+
+`helm_region` always layers `values.yaml` (chart default) with `$region-values.yaml`.
+`autoResourceAllocation` lets the operator size pod memory from the service quotas;
+CPU is pinned low because the chart default (2/4 per pod) will not fit 5+ nodes on
+kind. Live e2e PASS with all pods scheduled (no Pending).
+
 ## Task 12 review hardening (2026-06-22): cold-start arm gate (fix 1)
 
 `pkg/state` now arms only after observing the cluster healthy at least once

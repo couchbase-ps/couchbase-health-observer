@@ -1,5 +1,5 @@
-# region-b is only the failover target: a single data node, no index/query group,
-# and no bucket replica (one node cannot host a replica). Overrides the region-a base.
+# region-b: the failover target. A single data node, no index/query group, and no
+# bucket replica (one node cannot host a replica). Layered on top of values.yaml.
 couchbase-operator:
   buckets:
     observer:
@@ -7,7 +7,7 @@ couchbase-operator:
   cluster:
     name: region-b
     servers:
-      query: null
+      default: null
       data:
         size: 1
         services:

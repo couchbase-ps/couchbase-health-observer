@@ -1,3 +1,6 @@
+# Common values shared by both regions. Region-specific name, server topology, and
+# bucket replicas live in region-a-values.yaml / region-b-values.yaml and are layered
+# on top via `helm --values`.
 couchbase-operator:
   install:
     couchbaseOperator: true
@@ -15,13 +18,16 @@ couchbase-operator:
       replicas: 1
       storageBackend: couchstore
 
-  # region-a: the primary we exercise. 3 data nodes + 2 index/query nodes, bucket
-  # replica 1, and a short auto-failover timeout so a single-node loss is absorbed
-  # well inside the observer FailoverDelay (the "no switch on transient" path).
   cluster:
-    name: region-a
     image: couchbase/server:8.0.1
     antiAffinity: false
+    # Let the operator compute pod memory requests/limits from the service memory
+    # quotas (+ overhead) so each node reserves only what it needs. CPU is pinned low
+    # (defaults are 2/4 per pod, which would not fit 5+ nodes on a kind cluster).
+    autoResourceAllocation:
+      enabled: true
+      cpuRequests: "0.25"
+      cpuLimits: "1"
     security:
       username: Administrator
       password: password
@@ -32,14 +38,3 @@ couchbase-operator:
       indexServiceMemoryQuota: 256Mi
       autoFailoverTimeout: 5s
       autoFailoverMaxCount: 1
-    servers:
-      default: null
-      data:
-        size: 3
-        services:
-          - data
-      query:
-        size: 2
-        services:
-          - index
-          - query

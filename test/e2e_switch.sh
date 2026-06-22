@@ -23,21 +23,13 @@ trap cleanup EXIT
 
 helm_region() {
   local region="$1"
-
-  if [[ "$region" == "region-b" ]]; then
-    helm upgrade --install "$region" "$CB_CHART" \
-      --namespace "$region" \
-      --create-namespace \
-      --values "$CB_CHART/region-b-values.yaml" \
-      --wait \
-      --timeout 10m
-  else
-    helm upgrade --install "$region" "$CB_CHART" \
-      --namespace "$region" \
-      --create-namespace \
-      --wait \
-      --timeout 10m
-  fi
+  # Common values.yaml (chart default) layered with the region's own overrides.
+  helm upgrade --install "$region" "$CB_CHART" \
+    --namespace "$region" \
+    --create-namespace \
+    --values "$CB_CHART/$region-values.yaml" \
+    --wait \
+    --timeout 10m
 }
 
 install_region() {
