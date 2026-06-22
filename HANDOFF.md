@@ -37,3 +37,15 @@ Build the active path on top of the svchealth detector:
 - [x] state machine (`pkg/state`): sustained-DOWN FailoverDelay, reset on healthy, fires once, no auto-failback
 - [x] actuator (`pkg/actuator`): ConfigMap swap + rollout-restart, idempotent, dry-run, fake-clientset tested
 - [x] active mode: poll loop wiring detector -> state machine -> actuator; observe vs active; KUBECONFIG/in-cluster; dry-run
+
+## Phase 2 complete (2026-06-22): failover actuation merged to main
+
+state machine + actuator + active-mode wiring done, all unit-tested, build green.
+
+DEFERRED follow-up (own phase): live active-mode switch e2e. Needs the real two-environment
+topology — a Couchbase cluster PLUS a Kubernetes cluster (kind) holding the `cb-conn`
+ConfigMap + a dependent Deployment, with the observer (active mode) able to reach both.
+Steps: kind up; create ConfigMap + dummy Deployment; deploy observer active (--dry-run first);
+kill CB data nodes; confirm sustained DOWN past FailoverDelay -> ConfigMap connstring swapped
++ Deployment rolled. The single-cluster compose harness cannot exercise the actuator (no K8s
+objects to switch).
