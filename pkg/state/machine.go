@@ -16,6 +16,7 @@ type Machine struct {
 	firstDownAt time.Time
 	inDown      bool
 	switched    bool
+	armed       bool // true once the cluster has been seen healthy; gate against cold-start switch
 }
 
 type Result struct {
@@ -38,9 +39,16 @@ func (m *Machine) Observe(status string) Result {
 	res := Result{Status: status}
 
 	if status != "DOWN" {
-		// healthy (UP/DEGRADED): reset the DOWN timer. Do not auto-failback even
-		// if previously switched.
+		// healthy (UP/DEGRADED): arm the machine and reset the DOWN timer. Do not
+		// auto-failback even if previously switched.
+		m.armed = true
 		m.inDown = false
+		return res
+	}
+
+	if !m.armed {
+		// Cold start into an already-down primary: never switch until the cluster
+		// has been observed healthy at least once.
 		return res
 	}
 

@@ -110,3 +110,11 @@ e2e exercises the auto-failover-absorption path, matching the docker e2e:
   kind exceeds 10m (the earlier 10m timeout, not a resource limit — all 5 pods schedule).
 - Live e2e PASS: scenario A no-switch confirmed, scenario B switched cb-conn to
   region-b and rolled mock-app.
+
+## Task 12 review hardening (2026-06-22): cold-start arm gate (fix 1)
+
+`pkg/state` now arms only after observing the cluster healthy at least once
+(`armed` flag set on any non-DOWN status). A switch can never fire before that, so
+an observer that boots into an already-down primary (e.g. a pod reschedule mid-outage)
+will not auto-fail-over on cold start. `TestNoSwitchUntilFirstHealthy` covers it;
+existing tests now `Observe("UP")` first to arm. No auto-failback regardless.
