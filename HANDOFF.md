@@ -4,7 +4,7 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 
 ## State
 
-- **Branch:** `observer-sdk-health`
+- **Branch:** `main` (SDK per-service phase merged; was `observer-sdk-health`)
 - **Phase:** implementing the SDK per-service health detector (`pkg/svchealth`) from the plan.
 - **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
 - **Done:** repo bootstrap, compose, AGENTS/CLAUDE; Tasks 1-4 green (types, prober, Compute, gocb prober).
