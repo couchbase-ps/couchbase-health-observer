@@ -40,6 +40,12 @@ variable "dry_run" {
   default     = false
 }
 
+variable "eks_cluster_name" {
+  description = "If set, the Lambda authenticates to this EKS cluster via its IAM role (mapped by an access entry) instead of KUBECONFIG/in-cluster."
+  type        = string
+  default     = ""
+}
+
 variable "bootstrap_path" {
   description = "Path to the built linux/arm64 'bootstrap' binary (see build.sh)."
   type        = string
@@ -88,6 +94,18 @@ resource "aws_iam_role_policy_attachment" "vpc" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
+# eks:DescribeCluster so the Lambda can resolve the cluster endpoint/CA before building
+# an STS-token client (RBAC itself comes from the EKS access entry, created by the caller).
+resource "aws_iam_role_policy" "eks_describe" {
+  count = var.eks_cluster_name != "" ? 1 : 0
+  name  = "eks-describe"
+  role  = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = "eks:DescribeCluster", Resource = "*" }]
+  })
+}
+
 resource "aws_lambda_function" "switch" {
   function_name    = var.name
   role             = aws_iam_role.lambda.arn
@@ -102,10 +120,11 @@ resource "aws_lambda_function" "switch" {
     variables = {
       SECONDARY_CONN = var.secondary_conn
       DEPLOYMENTS    = var.deployments
-      NAMESPACE      = var.namespace
-      CONFIGMAP      = var.configmap
-      CONFIG_KEY     = var.config_key
-      DRY_RUN        = var.dry_run ? "true" : "false"
+      NAMESPACE        = var.namespace
+      CONFIGMAP        = var.configmap
+      CONFIG_KEY       = var.config_key
+      DRY_RUN          = var.dry_run ? "true" : "false"
+      EKS_CLUSTER_NAME = var.eks_cluster_name
     }
   }
 
