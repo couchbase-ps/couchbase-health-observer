@@ -1,39 +1,50 @@
 # deploy/aws — distributed-quorum aggregation infra
 
-Terraform for **path 2** of the MCA-replacement actuation (the distributed-quorum
-alternative to the single centralized observer). This is the **aggregation layer only**
-(plan 2): it turns the per-instance `/health/couchbase` results from the observer fleet
-into one quorum decision and publishes it to SNS. The SNS-triggered switch Lambda
-(plan 3) is deferred.
+Terraform for the distributed-quorum failover path: instead of one centralized observer
+owning the decision, run the observer health endpoint as a fleet and let AWS-managed
+primitives aggregate the result. This module is the **aggregation layer**: it turns the
+per-instance `/health/couchbase` results into one quorum decision and publishes it to an
+SNS topic. The SNS-triggered switch Lambda (the actuation) is a separate, later piece.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-  F["observer fleet (observe mode, N replicas)<br/>each serves /health/couchbase: 200 UP / 503 DOWN"] --> TG["monitoring-only ALB target group<br/>(no listener, no user traffic)"]
-  TG --> CW["CloudWatch: HealthyHostCount / UnHealthyHostCount"]
+  F["observer fleet (observe mode, N replicas)<br/>each serves /health/couchbase: 200 UP / 503 DOWN"] --> TG["monitoring target group<br/>(behind an internal ALB, no real traffic)"]
+  TG --> ALB["internal ALB + listener<br/>(runs the health checks; DNS never published)"]
+  ALB --> CW["CloudWatch: HealthyHostCount / UnHealthyHostCount<br/>per (TargetGroup, LoadBalancer)"]
   CW --> AL["quorum alarm: unhealthy ratio >= threshold for N periods"]
-  AL --> SNS["SNS topic (cb-health-switch)"]
-  SNS -.-> L["switch Lambda (plan 3, deferred)"]
+  AL --> SNS["SNS topic"]
+  SNS -.-> L["switch Lambda (deferred)"]
 ```
 
-- **Detection** is the existing observer running in **observe mode** as a fleet of
-  replicas (`k8s/observer-fleet.yaml`), each watching the same primary Couchbase through
-  its own SDK connection. We reuse the observer's health endpoint instead of embedding a
-  per-app health check.
-- **Aggregation/actuation** run on AWS-managed HA primitives, so there is no single
-  custom process owning the decision.
+- **Detection** is the observer running in **observe mode** as a fleet of replicas
+  (`k8s/observer-fleet.yaml`), each watching the same primary cluster through its own SDK
+  connection. We reuse the observer's health endpoint rather than embedding a per-app
+  health check.
+- **Aggregation** runs on AWS-managed HA primitives, so no single custom process owns the
+  decision.
 
-Both this stack and the kind switch stack assume the **apps run on Kubernetes/EKS**;
-Couchbase itself can stay on AWS VMs (only the connection-string target differs).
+> **Why the internal ALB?** AWS only health-checks and emits `Healthy/UnHealthyHostCount`
+> for a target group **attached to a load balancer**. A standalone target group reports
+> its targets as `unused` and emits no metrics. So the module creates an **internal** ALB
+> with a listener that forwards to the monitoring target group; the ALB carries no real
+> user traffic (its DNS is never published) and exists only to drive the health checks.
+> The metrics are keyed by **(TargetGroup, LoadBalancer)**, so the alarm must include both
+> dimensions — a TargetGroup-only alarm sees no data and never fires. Both points were
+> confirmed empirically on a real AWS account.
+
+This stack assumes the **apps run on Kubernetes/EKS**; the database itself can run
+elsewhere (only the connection-string target differs).
 
 ## Resources
 
 | File | Resource |
 |---|---|
-| `target_group.tf` | monitoring-only target group, health-checks `/health/couchbase` (200 healthy / 503 unhealthy), attached to no listener |
-| `alarm.tf` | CloudWatch metric-math alarm: `unhealthy / (unhealthy + healthy) >= quorum_threshold` for `sustained_periods`; `treatMissingData = notBreaching`; no `ok_actions` (no auto-failback) |
-| `sns.tf` | SNS topic the alarm publishes to (the Lambda will subscribe) |
+| `target_group.tf` | monitoring target group, health-checks `/health/couchbase` (200 healthy / 503 unhealthy) |
+| `alb.tf` | internal ALB + HTTP listener forwarding to the target group, and its security group (so AWS runs the health checks and emits metrics) |
+| `alarm.tf` | CloudWatch metric-math alarm: `unhealthy / (unhealthy + healthy) >= quorum_threshold` for `sustained_periods`, keyed by (TargetGroup, LoadBalancer); `treatMissingData = notBreaching`; no `ok_actions` (no auto-failback) |
+| `sns.tf` | SNS topic the alarm publishes to (the switch Lambda will subscribe) |
 | `k8s/observer-fleet.yaml` | observe-mode observer Deployment (AZ-spread) + Service |
 | `k8s/target-group-binding.yaml` | binds the fleet's pods into the target group (needs the AWS Load Balancer Controller) |
 
@@ -41,48 +52,55 @@ Couchbase itself can stay on AWS VMs (only the connection-string target differs)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `name_prefix` | `cb-health` | name prefix for TG / alarm / SNS |
+| `name_prefix` | `cb-health` | name prefix for the resources |
 | `vpc_id` | (required) | VPC of the EKS cluster running the fleet |
+| `subnet_ids` | (required) | >= 2 subnets in different AZs for the internal ALB |
 | `app_port` | `8080` | observer health port |
 | `health_path` | `/health/couchbase` | health endpoint |
 | `quorum_threshold` | `0.6` | unhealthy ratio at/above which the cluster is DOWN by quorum |
 | `sustained_periods` | `2` | consecutive 1-minute periods the quorum must hold (anti-flap) |
 
+The observer pods' security group must allow inbound on `app_port` from the ALB security
+group (output `monitoring_alb_security_group_id`) so the health checks reach them.
+
 ## Test on LocalStack (shape/flow)
 
-Proves the Terraform applies and the resources have the right shape. Does **not** prove
-real ALB metric emission (LocalStack limitation).
+Proves the Terraform applies and the resources have the right shape (target group, ALB +
+listener → TG, alarm with both dimensions, SNS). It does **not** prove real ALB metric
+emission (LocalStack limitation) — that is the AWS check below.
 
-Requires Docker, LocalStack with a license tier that **includes `elbv2`** (the
-monitoring target group), plus `cloudwatch` and `sns`. Note: the freemium/hobby tier
-covers `sns` and `cloudwatch` alarms but **not `elbv2`** — `terraform apply` then fails
-on the target group with `501 ... elbv2 service is not included within your LocalStack
-license`. On that tier you can still validate the SNS topic and the metric-math alarm
-shape, but the full apply needs an elbv2-capable tier (or use the AWS sandbox below).
-Wrappers:
+Requires Docker and LocalStack with a license tier that **includes `elbv2`** (plus
+`cloudwatch` and `sns`). The freemium tier excludes `elbv2`, so the apply fails on the
+target group with `501 ... elbv2 service is not included within your LocalStack license`.
 
 ```bash
 pip install terraform-local awscli-local
-LOCALSTACK_AUTH_TOKEN=... localstack start -d
-./test/aws/localstack.sh
+localstack auth set-token <token>   # or export LOCALSTACK_AUTH_TOKEN=...
+localstack start -d
+./test/aws/localstack.sh             # creates an ephemeral VPC + subnets, asserts, tears down
 ```
 
-## Apply + fidelity check (AWS sandbox)
+## Apply + fidelity check (AWS account)
 
-This is the real-AWS check LocalStack cannot give, and the demo for Emirates.
+The real-AWS check LocalStack cannot give, and the basis for a live demo.
+
+> No account-specific settings are committed. Provide auth/region via your AWS CLI config
+> (`AWS_PROFILE` / `AWS_REGION` / SSO) and the VPC/subnets via `-var`, or an **untracked**
+> tfvars file (`*.auto.tfvars` is gitignored).
 
 ```bash
 cd deploy/aws
-# auth/region come from your environment, e.g.:
-#   export AWS_PROFILE=my-sandbox AWS_REGION=eu-west-1
 terraform init
-terraform apply -var vpc_id=<your-vpc> -var name_prefix=cb-health
+terraform apply \
+  -var vpc_id=<your-vpc> \
+  -var 'subnet_ids=["<subnet-a>","<subnet-b>"]' \
+  -var name_prefix=cb-health
 ```
 
-Deploy the observer fleet and bind it into the target group (substitute the ARN):
+Deploy the observer fleet and bind it into the target group:
 
 ```bash
-# fleet: edit k8s/observer-fleet.yaml first (ECR image + primary Couchbase --conn)
+# fleet: edit k8s/observer-fleet.yaml first (image + primary cluster --conn)
 kubectl apply -f k8s/observer-fleet.yaml
 
 TG=$(terraform output -raw monitoring_target_group_arn)
@@ -92,18 +110,25 @@ sed "s#TARGET_GROUP_ARN#${TG}#" k8s/target-group-binding.yaml | kubectl apply -f
 Fidelity check:
 
 1. Confirm the fleet pods register: `aws elbv2 describe-target-health --target-group-arn $TG`.
-2. Force a quorum of observers to report DOWN (kill enough primary Couchbase nodes past
+2. Force a quorum of observers to report DOWN (take the primary cluster down past
    tolerance so `/health/couchbase` returns 503 on a majority of the fleet).
-3. Watch `UnHealthyHostCount` rise for the target group in CloudWatch.
+3. Watch `UnHealthyHostCount` rise for the target group (dimensions TargetGroup +
+   LoadBalancer) in CloudWatch.
 4. Confirm the alarm latches to ALARM after `sustained_periods` minutes:
    `aws cloudwatch describe-alarms --alarm-names cb-health-quorum-down`.
 5. Confirm a message lands on the SNS topic (subscribe a temporary SQS queue or email).
 
-This is the gate before wiring plan 3's switch Lambda.
+This is the gate before wiring the switch Lambda.
 
-## Open questions (carried from the design)
+### Validation status
 
-- Does a monitoring-only target group (no listener) reliably emit `UnHealthyHostCount`?
-- Right `quorum_threshold` + `sustained_periods` vs false positives.
+The full chain was validated on a real AWS account using an unreachable stand-in target
+(no compute): the target went `unhealthy`, `UnHealthyHostCount` emitted, the alarm latched
+to ALARM after the sustained window, and the SNS notification was delivered. The module
+applies and destroys cleanly on real AWS.
+
+## Open questions
+
+- Right `quorum_threshold` + `sustained_periods` for the target environment vs false positives.
 - `treatMissingData`: a whole-region/AZ outage zeros out hosts; "cannot tell" is
   non-actionable here. A minimum-healthy-host floor may be added as a second condition.

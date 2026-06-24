@@ -9,6 +9,11 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "subnet_ids" {
+  description = "Subnets (>= 2 in different AZs) for the internal monitoring ALB that drives the health checks."
+  type        = list(string)
+}
+
 variable "app_port" {
   description = "Port the observer health endpoint listens on."
   type        = number

@@ -1,6 +1,6 @@
-# Registers the observer fleet's pod IPs into the monitoring target group WITHOUT an
-# Ingress/listener, so ALB only health-checks them and never routes user traffic.
-# Requires the AWS Load Balancer Controller in the cluster.
+# Registers the observer fleet's pod IPs into the monitoring target group created by the
+# Terraform module. The module's internal ALB + listener run the health checks; this
+# binding adds no Ingress of its own. Requires the AWS Load Balancer Controller.
 # Replace TARGET_GROUP_ARN with the terraform output monitoring_target_group_arn.
 apiVersion: elbv2.k8s.aws/v1beta1
 kind: TargetGroupBinding

@@ -12,3 +12,13 @@ output "quorum_alarm_name" {
   description = "Name of the CloudWatch quorum alarm."
   value       = aws_cloudwatch_metric_alarm.quorum.alarm_name
 }
+
+output "monitoring_alb_arn" {
+  description = "Internal ALB that drives the target-group health checks."
+  value       = aws_lb.monitoring.arn
+}
+
+output "monitoring_alb_security_group_id" {
+  description = "ALB security group; the observer fleet pods must allow inbound on app_port from this SG."
+  value       = aws_security_group.monitoring.id
+}

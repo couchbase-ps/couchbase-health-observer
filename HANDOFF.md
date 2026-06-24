@@ -14,8 +14,12 @@ CBSE-22993 path-2 actuation. Reuse the observer health endpoint (observe-mode fl
 - `deploy/aws/` Terraform: monitoring-only target group (`/health/couchbase`, 200 healthy / 503 unhealthy, no listener); metric-math quorum alarm (`unhealthy/(unhealthy+healthy) >= quorum_threshold` for `sustained_periods`, `treatMissingData=notBreaching`, no `ok_actions`); SNS topic. Outputs: TG arn, SNS arn, alarm name.
 - `deploy/aws/k8s/`: observe-mode observer fleet Deployment (N replicas, AZ topology spread) + Service; TargetGroupBinding. Probes use `/healthz` (static) so a Couchbase-DOWN keeps pods Ready/registered; only the ALB TG checks `/health/couchbase`.
 - Tests live under `test/aws/localstack.sh` (asserts TG health path, alarm comparator, SNS topic). Test stacks were split into `test/{compose,kind,aws}`, each independently runnable.
-- Validated: `terraform validate` + `terraform fmt -check` green; k8s YAML parses. NOT yet run on LocalStack (needs LocalStack Pro + tflocal/awslocal + Docker) or an AWS sandbox (real ALB `UnHealthyHostCount` fidelity = `deploy/aws/README.md` runbook).
-- **Next:** run LocalStack shape check, then AWS-sandbox fidelity + Emirates demo; then build plan 3 switch Lambda (`cmd/switch-lambda`).
+- Validated: `terraform validate` + `fmt` green; LocalStack shape e2e green; **plumbing fidelity confirmed on a real AWS account**.
+- **Two findings from the AWS run, now fixed in the module:**
+  1. A standalone target group is not health-checked (targets read `unused`) and emits no metrics. The module now creates an **internal ALB + listener** (`alb.tf`) forwarding to the TG; the ALB carries no real traffic, it only drives health checks. New required var `subnet_ids` (>=2 AZs).
+  2. ALB emits `Healthy/UnHealthyHostCount` keyed by **(TargetGroup, LoadBalancer)**; a TargetGroup-only alarm sees no data and never fires. `alarm.tf` now includes the `LoadBalancer` dimension.
+- Real-AWS proof: unreachable stand-in target → `unhealthy` → `UnHealthyHostCount=1` → ratio 1.0 sustained 2 periods → ALARM → SNS → SQS message. Module applies and destroys cleanly. All sandbox resources torn down.
+- **Next:** the switch Lambda (`cmd/switch-lambda`, reuses `pkg/actuator`) subscribing to the SNS topic; then a full live demo (EKS + observer fleet + reachable Couchbase).
 
 ## History: Observer implementation (through Task 12)
 

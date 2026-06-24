@@ -29,7 +29,10 @@ resource "aws_cloudwatch_metric_alarm" "quorum" {
       period      = 60
       stat        = "Maximum"
       dimensions = {
-        TargetGroup = aws_lb_target_group.monitoring.arn_suffix
+        # ALB emits these metrics keyed by (TargetGroup, LoadBalancer). Both dimensions
+        # are required; a TargetGroup-only alarm sees no datapoints and never fires.
+        TargetGroup  = aws_lb_target_group.monitoring.arn_suffix
+        LoadBalancer = aws_lb.monitoring.arn_suffix
       }
     }
   }
@@ -42,11 +45,17 @@ resource "aws_cloudwatch_metric_alarm" "quorum" {
       period      = 60
       stat        = "Maximum"
       dimensions = {
-        TargetGroup = aws_lb_target_group.monitoring.arn_suffix
+        # ALB emits these metrics keyed by (TargetGroup, LoadBalancer). Both dimensions
+        # are required; a TargetGroup-only alarm sees no datapoints and never fires.
+        TargetGroup  = aws_lb_target_group.monitoring.arn_suffix
+        LoadBalancer = aws_lb.monitoring.arn_suffix
       }
     }
   }
 
   alarm_actions = [aws_sns_topic.switch.arn]
   ok_actions    = [] # no auto-failback: recovery does nothing
+
+  # The TG only emits metrics once it is attached to the ALB via the listener.
+  depends_on = [aws_lb_listener.monitoring]
 }

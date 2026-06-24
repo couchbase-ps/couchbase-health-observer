@@ -28,32 +28,49 @@ done
 
 cd "$MODULE"
 
-# elbv2 validates the VPC exists, so stand up an ephemeral VPC for the test and tear
-# everything down on exit (so the test is repeatable).
+# elbv2 validates the VPC/subnets exist, and the internal ALB needs >= 2 subnets in
+# different AZs. Stand up an ephemeral VPC + 2 subnets for the test and tear everything
+# down on exit (so the test is repeatable).
 VPC=$(awslocal ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
-echo "ephemeral vpc: $VPC"
+SUBNET_A=$(awslocal ec2 create-subnet --vpc-id "$VPC" --cidr-block 10.0.1.0/24 --availability-zone us-east-1a --query 'Subnet.SubnetId' --output text)
+SUBNET_B=$(awslocal ec2 create-subnet --vpc-id "$VPC" --cidr-block 10.0.2.0/24 --availability-zone us-east-1b --query 'Subnet.SubnetId' --output text)
+echo "ephemeral vpc: $VPC subnets: $SUBNET_A,$SUBNET_B"
+SUBNET_IDS="[\"$SUBNET_A\",\"$SUBNET_B\"]"
 cleanup() {
-  tflocal destroy -auto-approve -input=false -var-file="$TFVARS" -var "vpc_id=$VPC" >/dev/null 2>&1 || true
+  tflocal destroy -auto-approve -input=false -var-file="$TFVARS" -var "vpc_id=$VPC" -var "subnet_ids=$SUBNET_IDS" >/dev/null 2>&1 || true
+  awslocal ec2 delete-subnet --subnet-id "$SUBNET_A" >/dev/null 2>&1 || true
+  awslocal ec2 delete-subnet --subnet-id "$SUBNET_B" >/dev/null 2>&1 || true
   awslocal ec2 delete-vpc --vpc-id "$VPC" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 tflocal init -input=false >/dev/null
-tflocal apply -auto-approve -input=false -var-file="$TFVARS" -var "vpc_id=$VPC"
+tflocal apply -auto-approve -input=false -var-file="$TFVARS" -var "vpc_id=$VPC" -var "subnet_ids=$SUBNET_IDS"
 
 TG_ARN=$(tflocal output -raw monitoring_target_group_arn)
 SNS_ARN=$(tflocal output -raw switch_sns_topic_arn)
 ALARM=$(tflocal output -raw quorum_alarm_name)
+ALB_ARN=$(tflocal output -raw monitoring_alb_arn)
 
 echo "target group: $TG_ARN"
 awslocal elbv2 describe-target-groups --target-group-arns "$TG_ARN" \
   --query 'TargetGroups[0].HealthCheckPath' --output text | grep -q '/health/couchbase'
 
+echo "alb: $ALB_ARN"
+awslocal elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" \
+  --query 'LoadBalancers[0].Scheme' --output text | grep -q 'internal'
+# a listener must forward to the monitoring TG (otherwise the TG is never health-checked)
+awslocal elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+  --query 'Listeners[0].DefaultActions[0].TargetGroupArn' --output text | grep -q "$TG_ARN"
+
 echo "alarm: $ALARM"
 awslocal cloudwatch describe-alarms --alarm-names "$ALARM" \
   --query 'MetricAlarms[0].ComparisonOperator' --output text | grep -q 'GreaterThanOrEqualToThreshold'
+# the alarm metric must carry BOTH the TargetGroup and LoadBalancer dimensions
+awslocal cloudwatch describe-alarms --alarm-names "$ALARM" \
+  --query 'MetricAlarms[0].Metrics[].MetricStat.Metric.Dimensions[].Name' --output text | grep -q 'LoadBalancer'
 
 echo "sns: $SNS_ARN"
 awslocal sns list-topics --query 'Topics[].TopicArn' --output text | grep -q "$SNS_ARN"
 
-echo "PASS: terraform applies; target group health path, quorum alarm, and SNS topic present"
+echo "PASS: terraform applies; TG health path, internal ALB+listener -> TG, quorum alarm (TG+LB dims), and SNS topic present"
