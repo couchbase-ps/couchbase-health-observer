@@ -51,9 +51,10 @@ Two more bugs found driving the live switch end to end:
   the reference `sigs.k8s.io/aws-iam-authenticator/pkg/token` generator. Verified with a
   `-tags live` test (`pkg/eksauth/live_test.go`).
 
-The mock app is now a real Couchbase workload (`cmd/traffic-app`, image
-`tayebchlyah/couchbase-traffic-demo`) that logs each KV op + the connstring, so the switch
-is visible. **Verified end to end on real EKS**: region-a down -> quorum alarm ALARM ->
+The workload is a real Couchbase load generator: the built-in `cbc-pillowfight` from the
+`couchbase/server` image (no custom image to build/push), driving continuous KV ops
+against the cb-conn cluster and echoing the connstring so the target region is visible.
+**Verified end to end on real EKS**: region-a down -> quorum alarm ALARM ->
 SNS -> Lambda patched cb-conn to region-b + rolled traffic-app -> ops resumed
 `result=OK conn=...region-b`.
 

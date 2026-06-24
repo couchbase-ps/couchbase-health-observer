@@ -16,7 +16,8 @@ flowchart TD
 
 Components (all Terraform): VPC + EKS + managed node group, AWS Load Balancer Controller,
 2 Couchbase clusters via the official Operator chart (region-a primary 3 data, region-b
-secondary 1 data), the mock app, the observer fleet (image
+secondary 1 data), a `cbc-pillowfight` traffic workload (the `traffic-app` Deployment,
+from the `couchbase/server` image), the observer fleet (image
 `tayebchlyah/couchbase-health-observer`), the reused aggregation module (target group +
 internal ALB + quorum alarm + SNS), and the reused switch Lambda (authenticating to EKS
 via its IAM role through an access entry).
