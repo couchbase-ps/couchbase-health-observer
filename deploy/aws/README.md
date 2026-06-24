@@ -84,6 +84,11 @@ localstack start -d
 
 The real-AWS check LocalStack cannot give, and the basis for a live demo.
 
+For the automated version of this whole check (apply, drive a quorum-DOWN with an
+unreachable stand-in target, confirm `UnHealthyHostCount` → alarm `ALARM` → SNS, then
+tear down), run `./test/aws/aws.sh` with `VPC_ID` and `SUBNET_IDS` set. The manual steps
+below are the same thing, broken out, and are what you would adapt for a real fleet.
+
 > No account-specific settings are committed. Provide auth/region via your AWS CLI config
 > (`AWS_PROFILE` / `AWS_REGION` / SSO) and the VPC/subnets via `-var`, or an **untracked**
 > tfvars file (`*.auto.tfvars` is gitignored).

@@ -215,9 +215,10 @@ Tests are grouped by stack under `test/<stack>/`, and each stack is **fully inde
 | compose | `./test/compose/e2e.sh` | Docker | Detector e2e: baseline UP → kill a node → DOWN → auto-failover → UP. Auto-cleans up. |
 | kind (render) | `./test/kind/render.sh` | helm, kubectl | Render-only: builds the chart dependency, asserts both regions + manifests template correctly. Fast, no cluster created. |
 | kind (switch) | `./test/kind/e2e_switch.sh` | docker, kind, kubectl, helm | Active-mode e2e: installs both regions, scenario A (no switch) + scenario B (switch + rollout). Creates and deletes its own kind cluster. `KEEP_KIND=1` keeps it. |
-| aws | `./test/aws/localstack.sh` | terraform, localstack (Pro), tflocal, awslocal | Distributed-quorum aggregation infra: applies the Terraform and asserts the target group / quorum alarm / SNS shapes. (Real ALB metric fidelity is the AWS-sandbox runbook in `deploy/aws/README.md`.) |
+| aws (localstack) | `./test/aws/localstack.sh` | terraform, localstack (elbv2 tier), tflocal, awslocal | Distributed-quorum aggregation infra: applies the Terraform and asserts the target group, internal ALB→listener→TG, quorum alarm (TG+LB dims), and SNS shapes. Creates an ephemeral VPC + subnets, tears down. |
+| aws (real account) | `VPC_ID=… SUBNET_IDS=…,… ./test/aws/aws.sh` | terraform, aws CLI, authenticated AWS | Real-AWS fidelity: applies the module, registers an unreachable stand-in target (no compute), and confirms `UnHealthyHostCount` → quorum alarm `ALARM` → SNS delivered to a temp SQS queue. Tears everything down (`KEEP=1` to keep). |
 
-Each stack is isolated: `compose` only touches Docker Compose, `kind` only its own kind cluster, `aws` only Terraform/LocalStack. None share state, so they can run in any order or alone.
+Each stack is isolated: `compose` only touches Docker Compose, `kind` only its own kind cluster, `aws` only Terraform/LocalStack or your AWS account. None share state, so they can run in any order or alone.
 
 ## Repository layout
 
