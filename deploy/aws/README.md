@@ -53,7 +53,13 @@ Couchbase itself can stay on AWS VMs (only the connection-string target differs)
 Proves the Terraform applies and the resources have the right shape. Does **not** prove
 real ALB metric emission (LocalStack limitation).
 
-Requires Docker, LocalStack **Pro** (ELBv2 + CloudWatch are Pro), and the wrappers:
+Requires Docker, LocalStack with a license tier that **includes `elbv2`** (the
+monitoring target group), plus `cloudwatch` and `sns`. Note: the freemium/hobby tier
+covers `sns` and `cloudwatch` alarms but **not `elbv2`** — `terraform apply` then fails
+on the target group with `501 ... elbv2 service is not included within your LocalStack
+license`. On that tier you can still validate the SNS topic and the metric-math alarm
+shape, but the full apply needs an elbv2-capable tier (or use the AWS sandbox below).
+Wrappers:
 
 ```bash
 pip install terraform-local awscli-local

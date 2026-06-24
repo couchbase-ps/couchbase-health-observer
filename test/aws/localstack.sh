@@ -6,10 +6,13 @@
 # the way real ALB does -- that fidelity check is the AWS-sandbox runbook in
 # deploy/aws/README.md.
 #
-# Requires: Docker, LocalStack *Pro* (ELBv2 and CloudWatch are Pro features) running,
-# plus the tflocal and awslocal wrappers:
+# Requires: Docker, LocalStack running with a license tier that includes elbv2 (plus
+# cloudwatch and sns). The freemium tier excludes elbv2, so the target group apply
+# fails with HTTP 501 "elbv2 service is not included within your LocalStack license".
+# Setup:
 #   pip install terraform-local awscli-local
-#   LOCALSTACK_AUTH_TOKEN=... localstack start -d
+#   localstack auth set-token <token>   # or export LOCALSTACK_AUTH_TOKEN=...
+#   localstack start -d
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
