@@ -14,3 +14,7 @@
 # account-specific var files must never be committed (use -var or these untracked files)
 *.auto.tfvars
 sandbox.tfvars
+
+# Lambda build artifacts
+deploy/aws/lambda/bootstrap
+*.zip
