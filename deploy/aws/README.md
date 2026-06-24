@@ -73,8 +73,10 @@ This is the real-AWS check LocalStack cannot give, and the demo for Emirates.
 
 ```bash
 cd deploy/aws
+# auth/region come from your environment, e.g.:
+#   export AWS_PROFILE=my-sandbox AWS_REGION=eu-west-1
 terraform init
-terraform apply -var vpc_id=<sandbox-vpc> -var name_prefix=cb-health
+terraform apply -var vpc_id=<your-vpc> -var name_prefix=cb-health
 ```
 
 Deploy the observer fleet and bind it into the target group (substitute the ARN):

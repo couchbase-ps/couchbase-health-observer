@@ -11,3 +11,6 @@
 *.tfstate.*
 .terraform.lock.hcl
 *.tfplan
+# account-specific var files must never be committed (use -var or these untracked files)
+*.auto.tfvars
+sandbox.tfvars
