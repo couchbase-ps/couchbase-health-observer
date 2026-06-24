@@ -7,7 +7,7 @@ module "lambda" {
   name                 = "${var.name}-switch"
   switch_sns_topic_arn = module.agg.switch_sns_topic_arn
   secondary_conn       = "couchbase://region-b-srv.region-b.svc"
-  deployments          = "mock-app"
+  deployments          = "traffic-app"
   namespace            = "default"
   configmap            = "cb-conn"
   config_key           = "connstring"

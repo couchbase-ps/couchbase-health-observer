@@ -34,6 +34,12 @@ variable "observer_replicas" {
   default = 3
 }
 
+variable "traffic_image" {
+  description = "Image for the demo Couchbase traffic app."
+  type        = string
+  default     = "tayebchlyah/couchbase-traffic-demo:latest"
+}
+
 # Couchbase admin credentials for the demo clusters (demo-only).
 variable "cb_username" {
   type    = string

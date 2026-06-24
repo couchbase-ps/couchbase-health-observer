@@ -10,26 +10,29 @@ resource "kubernetes_config_map" "cb_conn" {
   }
 }
 
-resource "kubernetes_deployment" "mock_app" {
+# A real Couchbase workload: continuously upserts/reads a doc against the cluster named in
+# cb-conn, logging each op. On a switch the Lambda flips cb-conn to region-b and rolls this
+# Deployment, so its new pods re-bootstrap against region-b -- you can watch ops fail on
+# the dead cluster and resume on the secondary.
+resource "kubernetes_deployment" "traffic_app" {
   metadata {
-    name      = "mock-app"
+    name      = "traffic-app"
     namespace = "default"
-    labels    = { app = "mock-app" }
+    labels    = { app = "traffic-app" }
   }
   spec {
     replicas = 2
     selector {
-      match_labels = { app = "mock-app" }
+      match_labels = { app = "traffic-app" }
     }
     template {
       metadata {
-        labels = { app = "mock-app" }
+        labels = { app = "traffic-app" }
       }
       spec {
         container {
-          name    = "mock-app"
-          image   = "busybox:1.36"
-          command = ["sh", "-c", "while true; do echo connstring=$CONNSTRING; sleep 5; done"]
+          name  = "traffic-app"
+          image = var.traffic_image
           env {
             name = "CONNSTRING"
             value_from {
@@ -38,6 +41,18 @@ resource "kubernetes_deployment" "mock_app" {
                 key  = "connstring"
               }
             }
+          }
+          env {
+            name  = "BUCKET"
+            value = "observer"
+          }
+          env {
+            name  = "CB_USER"
+            value = var.cb_username
+          }
+          env {
+            name  = "CB_PASS"
+            value = var.cb_password
           }
         }
       }
