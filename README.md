@@ -63,6 +63,25 @@ go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # obser
 > Docker Compose or Kubernetes cluster this means running the observer **inside** that
 > network (see below), not from the host.
 
+## Container image
+
+Published multi-arch (`linux/amd64` + `linux/arm64`) to Docker Hub:
+
+```
+docker.io/tayebchlyah/couchbase-health-observer:latest   # also :vX.Y.Z, :X.Y, :sha-<sha>
+```
+
+GitHub Actions (`.github/workflows/docker-publish.yml`) builds and pushes it on every
+push to `main` and on `v*` tags (pull requests build only, no push). The job needs two
+repo secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+
+Build locally (multi-arch) with buildx:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t tayebchlyah/couchbase-health-observer:dev --push .
+```
+
 ### Flags
 
 | Flag | Default | Purpose |
