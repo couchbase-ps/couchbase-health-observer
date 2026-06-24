@@ -205,21 +205,19 @@ kind delete cluster --name "$KIND"
 > healthy at least once. An observer that boots into an already-down primary (e.g. a
 > pod reschedule during an outage) will not auto-fail-over on cold start.
 
-## Automated end-to-end tests
+## Tests
 
-| Script | What it does |
-|---|---|
-| `go test ./...` | Unit tests (detector, state machine, actuator) — no cluster needed |
-| `test/kind_helm_test.sh` | Render-only: builds the chart dependency and asserts both regions and the Kubernetes manifests template correctly (fast) |
-| `test/e2e.sh` | Docker Compose detector e2e: baseline UP, kill a node -> DOWN, auto-failover -> UP. Auto-cleans up |
-| `test/e2e_switch.sh` | kind + Helm active-mode e2e: installs both regions, runs scenario A (no switch) and scenario B (switch + rollout). Creates and deletes the kind cluster automatically. Set `KEEP_KIND=1` to keep it for inspection |
+Tests are grouped by stack under `test/<stack>/`, and each stack is **fully independent** — you can run any one on its own without the others. Infra for each stack lives under the matching `deploy/<stack>/`.
 
-```bash
-go test ./...
-./test/kind_helm_test.sh
-./test/e2e.sh
-./test/e2e_switch.sh
-```
+| Stack | Command | Needs | What it does |
+|---|---|---|---|
+| unit | `go test ./...` | Go only | Unit tests (detector, state machine, actuator). No cluster. |
+| compose | `./test/compose/e2e.sh` | Docker | Detector e2e: baseline UP → kill a node → DOWN → auto-failover → UP. Auto-cleans up. |
+| kind (render) | `./test/kind/render.sh` | helm, kubectl | Render-only: builds the chart dependency, asserts both regions + manifests template correctly. Fast, no cluster created. |
+| kind (switch) | `./test/kind/e2e_switch.sh` | docker, kind, kubectl, helm | Active-mode e2e: installs both regions, scenario A (no switch) + scenario B (switch + rollout). Creates and deletes its own kind cluster. `KEEP_KIND=1` keeps it. |
+| aws | `./test/aws/localstack.sh` | terraform, localstack (Pro), tflocal, awslocal | Distributed-quorum aggregation infra: applies the Terraform and asserts the target group / quorum alarm / SNS shapes. (Real ALB metric fidelity is the AWS-sandbox runbook in `deploy/aws/README.md`.) |
+
+Each stack is isolated: `compose` only touches Docker Compose, `kind` only its own kind cluster, `aws` only Terraform/LocalStack. None share state, so they can run in any order or alone.
 
 ## Repository layout
 
@@ -228,9 +226,12 @@ pkg/svchealth/        SDK per-service health detector (types, prober, Compute, H
 pkg/state/            anti-flap state machine (FailoverDelay, cold-start arm gate)
 pkg/actuator/         Kubernetes actuator (ConfigMap swap + rollout-restart)
 cmd/svchealthcheck/   server + active control loop
-deploy/compose/       5-node Couchbase EE 8.0.1 compose harness (observe-mode detector e2e)
-deploy/kind/          kind cluster, official Couchbase Helm chart wrapper, mock app, observer
-test/                 unit-adjacent e2e scripts (see above)
+deploy/compose/       5-node Couchbase EE 8.0.1 compose harness (compose detector stack)
+deploy/kind/          kind cluster, official Couchbase Helm chart wrapper, mock app, observer (kind switch stack)
+deploy/aws/           distributed-quorum AWS aggregation: monitoring target group + quorum alarm + SNS (Terraform)
+test/compose/         compose stack e2e
+test/kind/            kind stack render + switch e2e
+test/aws/             aws stack localstack assertions
 HANDOFF.md            running build/handoff log
 AGENTS.md             operating rules for any agent working in this repo
 ```

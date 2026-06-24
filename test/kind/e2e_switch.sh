@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 KIND_CLUSTER="${KIND_CLUSTER:-couchbase-health-observer}"
 OBSERVER_IMAGE="${OBSERVER_IMAGE:-couchbase-health-observer:dev}"
 KEEP_KIND="${KEEP_KIND:-0}"

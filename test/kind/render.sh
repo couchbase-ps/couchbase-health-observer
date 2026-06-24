@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CHART="$ROOT/deploy/kind/couchbase-cluster"
 
 helm dependency build "$CHART" >/dev/null

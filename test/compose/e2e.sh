@@ -3,7 +3,7 @@
 # every node), and we assert its /health/couchbase over the mapped host port.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -f $HERE/../deploy/compose/docker-compose.yml"
+COMPOSE="docker compose -f $HERE/../../deploy/compose/docker-compose.yml"
 URL="http://localhost:8080/health/couchbase"
 
 # Global status only (top-level .status); jq avoids grabbing a per-service status.

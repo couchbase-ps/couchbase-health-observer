@@ -65,7 +65,7 @@ membership/strategy detection core. So several tasks were superseded, not done v
 | 8 Actuator (K8s) | done (pkg/actuator) |
 | 9 Active mode wiring | done (cmd active mode) |
 | 10 Dockerfile + image | done |
-| 11 Compose e2e driver | done (test/e2e.sh) |
+| 11 Compose e2e driver | done (test/compose/e2e.sh) |
 | 12 Kubernetes switch e2e (kind + CAO) | done |
 
 Net: membership/strategy detection (Tasks 1/4/5) replaced by the SDK per-service
@@ -89,7 +89,7 @@ active-mode switch e2e now closes the final pending capability.
   sustained DOWN exceeded `15s`; observer changed `cb-conn` to
   `couchbase://region-b-srv.region-b.svc`; mock-app received a rollout restart
   and new pods logged the region-b connstring.
-- Run: `./test/e2e_switch.sh` (creates and deletes kind automatically).
+- Run: `./test/kind/e2e_switch.sh` (creates and deletes kind automatically).
 
 ## Task 12 review hardening (2026-06-22): full failover scenarios on region-a
 
