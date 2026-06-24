@@ -27,8 +27,19 @@ for c in tflocal awslocal; do
 done
 
 cd "$MODULE"
+
+# elbv2 validates the VPC exists, so stand up an ephemeral VPC for the test and tear
+# everything down on exit (so the test is repeatable).
+VPC=$(awslocal ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
+echo "ephemeral vpc: $VPC"
+cleanup() {
+  tflocal destroy -auto-approve -input=false -var-file="$TFVARS" -var "vpc_id=$VPC" >/dev/null 2>&1 || true
+  awslocal ec2 delete-vpc --vpc-id "$VPC" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 tflocal init -input=false >/dev/null
-tflocal apply -auto-approve -input=false -var-file="$TFVARS"
+tflocal apply -auto-approve -input=false -var-file="$TFVARS" -var "vpc_id=$VPC"
 
 TG_ARN=$(tflocal output -raw monitoring_target_group_arn)
 SNS_ARN=$(tflocal output -raw switch_sns_topic_arn)
