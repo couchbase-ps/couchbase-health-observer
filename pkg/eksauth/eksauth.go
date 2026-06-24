@@ -1,8 +1,8 @@
-// Package eksauth builds a Kubernetes client for an EKS cluster from AWS credentials,
-// the way `aws eks get-token` does: a presigned STS GetCallerIdentity request, carrying
-// the cluster name in a signed header, encoded as the cluster bearer token. This lets the
-// switch Lambda (which runs outside the cluster) authenticate to the EKS API using its
-// IAM role, mapped to Kubernetes RBAC via an EKS access entry.
+// Package eksauth builds a Kubernetes client for an EKS cluster from AWS credentials. The
+// bearer token is produced by the reference aws-iam-authenticator generator (the same
+// thing `aws eks get-token` uses), so the switch Lambda (which runs outside the cluster)
+// authenticates to the EKS API with its IAM role, mapped to Kubernetes RBAC via an EKS
+// access entry. The cluster endpoint and CA come from the AWS SDK v2 EKS API.
 package eksauth
 
 import (
@@ -12,35 +12,23 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
-	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/token"
 )
 
-const (
-	tokenPrefix   = "k8s-aws-v1."
-	clusterHeader = "x-k8s-aws-id"
-)
-
-// encodeToken wraps a presigned STS URL into the EKS bearer-token format.
-func encodeToken(presignedURL string) string {
-	return tokenPrefix + base64.RawURLEncoding.EncodeToString([]byte(presignedURL))
-}
-
-// token presigns an STS GetCallerIdentity request with the cluster name in the signed
-// x-k8s-aws-id header and returns the EKS bearer token.
-func token(ctx context.Context, stsClient *sts.Client, clusterName string) (string, error) {
-	presigner := sts.NewPresignClient(stsClient)
-	out, err := presigner.PresignGetCallerIdentity(ctx, &sts.GetCallerIdentityInput{}, func(po *sts.PresignOptions) {
-		po.ClientOptions = append(po.ClientOptions, func(o *sts.Options) {
-			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue(clusterHeader, clusterName))
-		})
-	})
+// ClusterToken returns the EKS bearer token for the named cluster using ambient AWS
+// credentials.
+func ClusterToken(ctx context.Context, clusterName string) (string, error) {
+	gen, err := token.NewGenerator(false, false)
 	if err != nil {
-		return "", fmt.Errorf("presign sts: %w", err)
+		return "", fmt.Errorf("token generator: %w", err)
 	}
-	return encodeToken(out.URL), nil
+	tk, err := gen.GetWithOptions(ctx, &token.GetTokenOptions{ClusterID: clusterName})
+	if err != nil {
+		return "", fmt.Errorf("get token: %w", err)
+	}
+	return tk.Token, nil
 }
 
 // Clientset builds a Kubernetes client for the named EKS cluster using the ambient AWS
@@ -60,14 +48,14 @@ func Clientset(ctx context.Context, clusterName string) (kubernetes.Interface, e
 		return nil, fmt.Errorf("decode cluster CA: %w", err)
 	}
 
-	tok, err := token(ctx, sts.NewFromConfig(cfg), clusterName)
+	tk, err := ClusterToken(ctx, clusterName)
 	if err != nil {
 		return nil, err
 	}
 
 	return kubernetes.NewForConfig(&rest.Config{
 		Host:        *desc.Cluster.Endpoint,
-		BearerToken: tok,
+		BearerToken: tk,
 		TLSClientConfig: rest.TLSClientConfig{
 			CAData: ca,
 		},
