@@ -14,6 +14,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/actuator"
+	"github.com/couchbaselabs/couchbase-health-observer/pkg/eksauth"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/switchhandler"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -67,11 +68,19 @@ func splitNonEmpty(s string) []string {
 	return out
 }
 
-// mustClientset builds a Kubernetes client. KUBECONFIG (set for the kind e2e or via a
-// mounted kubeconfig in the Lambda) takes precedence; otherwise in-cluster config. Real
-// EKS access from Lambda is granted by an EKS access entry mapping the Lambda role (see
-// deploy/aws/lambda/README.md); the kubeconfig/token wiring is environment-specific.
+// mustClientset builds a Kubernetes client. Precedence:
+//   - EKS_CLUSTER_NAME set: authenticate to that EKS cluster with the Lambda's IAM role
+//     via an STS token (the role must be mapped through an EKS access entry).
+//   - KUBECONFIG set: use it (kind e2e / local).
+//   - otherwise: in-cluster config.
 func mustClientset() kubernetes.Interface {
+	if name := os.Getenv("EKS_CLUSTER_NAME"); name != "" {
+		cs, err := eksauth.Clientset(context.Background(), name)
+		if err != nil {
+			log.Fatalf("eks client: %v", err)
+		}
+		return cs
+	}
 	var cfg *rest.Config
 	var err error
 	if kc := os.Getenv("KUBECONFIG"); kc != "" {
