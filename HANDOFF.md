@@ -42,9 +42,23 @@ Two bugs found + fixed during the live apply:
   SG, so the ALB health checks timed out until a rule was added on
   `module.eks.cluster_primary_security_group_id` (kept the node SG rule too).
 
-Status: applied live and verified healthy (observer 200/UP, target group 3/3 healthy,
-quorum alarm OK). Left running for manual demo/testing (NOT destroyed). Drive + teardown
-steps in `deploy/aws/eks-demo/README.md`.
+Two more bugs found driving the live switch end to end:
+- **In-VPC Lambda could not reach the API.** The cluster had public-only endpoint access;
+  a Lambda in the private subnets timed out. Enabled `cluster_endpoint_private_access` and
+  opened 443 from the lambda SG to `module.eks.cluster_security_group_id`.
+- **Invalid EKS token.** The hand-rolled SDK v2 STS presign produced a token with no
+  `X-Amz-Expires` (EKS -> 401 Unauthorized). Replaced `pkg/eksauth` token generation with
+  the reference `sigs.k8s.io/aws-iam-authenticator/pkg/token` generator. Verified with a
+  `-tags live` test (`pkg/eksauth/live_test.go`).
+
+The mock app is now a real Couchbase workload (`cmd/traffic-app`, image
+`tayebchlyah/couchbase-traffic-demo`) that logs each KV op + the connstring, so the switch
+is visible. **Verified end to end on real EKS**: region-a down -> quorum alarm ALARM ->
+SNS -> Lambda patched cb-conn to region-b + rolled traffic-app -> ops resumed
+`result=OK conn=...region-b`.
+
+Status: left running for manual demo/testing (NOT destroyed). Drive + teardown steps in
+`deploy/aws/eks-demo/README.md`.
 
 ## Distributed-quorum switch Lambda (2026-06-24)
 
