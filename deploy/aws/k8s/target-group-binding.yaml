@@ -1,0 +1,15 @@
+# Registers the observer fleet's pod IPs into the monitoring target group WITHOUT an
+# Ingress/listener, so ALB only health-checks them and never routes user traffic.
+# Requires the AWS Load Balancer Controller in the cluster.
+# Replace TARGET_GROUP_ARN with the terraform output monitoring_target_group_arn.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: cb-observer-health-monitoring
+  namespace: default
+spec:
+  serviceRef:
+    name: cb-observer-health # the observer fleet Service exposing /health/couchbase
+    port: 8080
+  targetGroupARN: TARGET_GROUP_ARN
+  targetType: ip
