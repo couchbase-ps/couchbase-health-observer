@@ -32,6 +32,17 @@ func main() {
 	h := switchhandler.New(&actuator.K8sActuator{Client: mustClientset(), Cfg: cfg})
 	log.Printf("switch-lambda ready: namespace=%s configmap=%s deployments=%q secondary=%q dryRun=%v",
 		cfg.Namespace, cfg.ConfigMap, cfg.Deployments, cfg.Secondary, cfg.DryRun)
+
+	// One-shot mode: if ONESHOT_EVENT holds an SNS event JSON, process it once and exit.
+	// Used by the kind e2e to drive the real binary against a cluster without the Lambda
+	// runtime. Otherwise run as a normal Lambda.
+	if ev := os.Getenv("ONESHOT_EVENT"); ev != "" {
+		if err := h.Handle(context.Background(), []byte(ev)); err != nil {
+			log.Fatalf("oneshot handle: %v", err)
+		}
+		return
+	}
+
 	lambda.Start(func(ctx context.Context, raw json.RawMessage) error {
 		return h.Handle(ctx, raw)
 	})
