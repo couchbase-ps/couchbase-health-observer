@@ -83,7 +83,19 @@ kubectl logs "$(terraform output -raw lambda_function_name)" 2>/dev/null || \
   aws logs tail "/aws/lambda/$(terraform output -raw lambda_function_name)" --since 10m
 ```
 
-Failback is manual: set the ConfigMap back to region-a and unpause/recover region-a.
+Failback is manual. To return to the region-a baseline:
+
+```bash
+kubectl patch couchbasecluster region-a -n region-a --type=merge -p '{"spec":{"paused":false}}'  # recover region-a
+# wait for region-a data pods Ready, then:
+kubectl patch configmap cb-conn -p '{"data":{"connstring":"couchbase://region-a-srv.region-a.svc"}}'
+kubectl rollout restart deployment/traffic-app          # app reconnects to region-a
+kubectl rollout restart deployment/cb-observer-health   # observers re-bootstrap onto the rebuilt region-a
+```
+
+> The observer fleet (and the app) hold long-lived SDK connections, so after a cluster is
+> torn down and rebuilt they must be rolled to reconnect; otherwise they keep reporting
+> the old cluster as DOWN and the quorum alarm stays latched.
 
 ## Teardown
 
