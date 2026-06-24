@@ -34,10 +34,10 @@ variable "observer_replicas" {
   default = 3
 }
 
-variable "traffic_image" {
-  description = "Image for the demo Couchbase traffic app."
+variable "cb_server_image" {
+  description = "Couchbase Server image; also provides cbc-pillowfight for the traffic generator."
   type        = string
-  default     = "tayebchlyah/couchbase-traffic-demo:latest"
+  default     = "couchbase/server:8.0.1"
 }
 
 # Couchbase admin credentials for the demo clusters (demo-only).

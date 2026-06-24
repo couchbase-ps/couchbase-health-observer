@@ -14,6 +14,12 @@ resource "kubernetes_config_map" "cb_conn" {
 # cb-conn, logging each op. On a switch the Lambda flips cb-conn to region-b and rolls this
 # Deployment, so its new pods re-bootstrap against region-b -- you can watch ops fail on
 # the dead cluster and resume on the secondary.
+#
+# Uses the built-in cbc-pillowfight load generator from the couchbase/server image (no
+# custom image to build/push). It connects to the cluster in cb-conn and runs continuous
+# KV ops against the observer bucket; on a switch the Lambda rolls this Deployment so its
+# new pods pick up the region-b connstring. The container echoes the connstring at start
+# so the target region is visible in the logs.
 resource "kubernetes_deployment" "traffic_app" {
   metadata {
     name      = "traffic-app"
@@ -31,8 +37,12 @@ resource "kubernetes_deployment" "traffic_app" {
       }
       spec {
         container {
-          name  = "traffic-app"
-          image = var.traffic_image
+          name    = "traffic-app"
+          image   = var.cb_server_image
+          command = ["sh", "-c"]
+          args = [
+            "echo \"traffic-app -> $CONNSTRING\"; exec /opt/couchbase/bin/cbc-pillowfight -U \"$CONNSTRING/observer\" -u \"$CB_USER\" -P \"$CB_PASS\" --num-threads 1 --num-items 1000 --rate-limit 50",
+          ]
           env {
             name = "CONNSTRING"
             value_from {
@@ -41,10 +51,6 @@ resource "kubernetes_deployment" "traffic_app" {
                 key  = "connstring"
               }
             }
-          }
-          env {
-            name  = "BUCKET"
-            value = "observer"
           }
           env {
             name  = "CB_USER"
