@@ -10,13 +10,24 @@ module "agg" {
 }
 
 # Allow the monitoring ALB to health-check the observer pods on 8080. EKS pods get VPC IPs
-# (VPC CNI), so the ALB reaches them on the node security group.
-resource "aws_security_group_rule" "alb_to_observer" {
+# (VPC CNI) and their ENIs carry both the node SG and the cluster primary SG, so allow the
+# ALB SG into both.
+resource "aws_security_group_rule" "alb_to_observer_node" {
   type                     = "ingress"
   from_port                = 8080
   to_port                  = 8080
   protocol                 = "tcp"
   security_group_id        = module.eks.node_security_group_id
   source_security_group_id = module.agg.monitoring_alb_security_group_id
-  description              = "monitoring ALB health checks to observer pods"
+  description              = "monitoring ALB health checks to observer pods (node SG)"
+}
+
+resource "aws_security_group_rule" "alb_to_observer_cluster" {
+  type                     = "ingress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  security_group_id        = module.eks.cluster_primary_security_group_id
+  source_security_group_id = module.agg.monitoring_alb_security_group_id
+  description              = "monitoring ALB health checks to observer pods (cluster primary SG)"
 }

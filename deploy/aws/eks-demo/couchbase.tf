@@ -1,6 +1,10 @@
 # Two Couchbase clusters via the official Couchbase Operator chart (operator + admission
 # controller + CouchbaseCluster per release). region-a is the slim primary (3 data nodes),
 # region-b the single-node secondary.
+#
+# NOTE: the couchbase-operator chart is installed DIRECTLY here, so its values are at the
+# TOP level (no `couchbase-operator:` wrapper -- that nesting is only for when the chart is
+# a subchart/dependency, as in deploy/kind/couchbase-cluster).
 locals {
   cb_common = {
     install = {
@@ -43,14 +47,12 @@ resource "helm_release" "region_a" {
   wait             = true
   timeout          = 900
 
-  values = [yamlencode({
-    couchbase-operator = merge(local.cb_common, {
-      cluster = merge(local.cb_common.cluster, {
-        name    = "region-a"
-        servers = { default = null, data = { size = 3, services = ["data"] } }
-      })
+  values = [yamlencode(merge(local.cb_common, {
+    cluster = merge(local.cb_common.cluster, {
+      name    = "region-a"
+      servers = { default = null, data = { size = 3, services = ["data"] } }
     })
-  })]
+  }))]
 
   depends_on = [helm_release.alb]
 }
@@ -65,15 +67,13 @@ resource "helm_release" "region_b" {
   wait             = true
   timeout          = 900
 
-  values = [yamlencode({
-    couchbase-operator = merge(local.cb_common, {
-      buckets = merge(local.cb_common.buckets, { observer = merge(local.cb_common.buckets.observer, { replicas = 0 }) })
-      cluster = merge(local.cb_common.cluster, {
-        name    = "region-b"
-        servers = { default = null, data = { size = 1, services = ["data"] } }
-      })
+  values = [yamlencode(merge(local.cb_common, {
+    buckets = merge(local.cb_common.buckets, { observer = merge(local.cb_common.buckets.observer, { replicas = 0 }) })
+    cluster = merge(local.cb_common.cluster, {
+      name    = "region-b"
+      servers = { default = null, data = { size = 1, services = ["data"] } }
     })
-  })]
+  }))]
 
   depends_on = [helm_release.region_a]
 }

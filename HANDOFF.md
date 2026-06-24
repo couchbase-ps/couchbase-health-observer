@@ -21,6 +21,31 @@ CBSE-22993 path-2 actuation. Reuse the observer health endpoint (observe-mode fl
 - Real-AWS proof: unreachable stand-in target → `unhealthy` → `UnHealthyHostCount=1` → ratio 1.0 sustained 2 periods → ALARM → SNS → SQS message. Module applies and destroys cleanly. All sandbox resources torn down.
 - **Next:** a full live demo (EKS + observer fleet + reachable Couchbase + the switch Lambda end to end).
 
+## Full Path-2 EKS demo (Terraform, 2026-06-24)
+
+`deploy/aws/eks-demo/` stands up the entire distributed-quorum architecture on real EKS:
+VPC + EKS + node group, AWS Load Balancer Controller (IRSA), 2 Couchbase clusters via the
+official Operator chart (region-a slim 3-data primary, region-b 1-data secondary), mock
+app, observer fleet (Docker Hub image `tayebchlyah/couchbase-health-observer`), reused
+aggregation + switch-lambda modules, and an EKS access entry for the Lambda role. The
+Lambda authenticates to EKS via `pkg/eksauth` (STS token) using `EKS_CLUSTER_NAME`.
+
+Apply is two-phase (`-target=module.vpc -target=module.eks`, then full) because the
+kubernetes/helm providers depend on the cluster created in the same config.
+
+Two bugs found + fixed during the live apply:
+- **Helm values nesting.** The `couchbase-operator` chart is installed DIRECTLY here, so
+  its values must be TOP-LEVEL. Nesting them under `couchbase-operator:` (correct only for
+  the kind subchart wrapper) made the chart silently use defaults: bucket named `default`
+  instead of `observer`, so the observer's `--bucket=observer` found nothing -> DOWN.
+- **ALB->pod security group.** EKS pod ENIs carry the cluster primary SG, not just the node
+  SG, so the ALB health checks timed out until a rule was added on
+  `module.eks.cluster_primary_security_group_id` (kept the node SG rule too).
+
+Status: applied live and verified healthy (observer 200/UP, target group 3/3 healthy,
+quorum alarm OK). Left running for manual demo/testing (NOT destroyed). Drive + teardown
+steps in `deploy/aws/eks-demo/README.md`.
+
 ## Distributed-quorum switch Lambda (2026-06-24)
 
 The SNS-triggered actuation for path 2, in this repo (not a separate repo), reusing `pkg/actuator`.
