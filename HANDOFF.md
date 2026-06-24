@@ -19,7 +19,19 @@ CBSE-22993 path-2 actuation. Reuse the observer health endpoint (observe-mode fl
   1. A standalone target group is not health-checked (targets read `unused`) and emits no metrics. The module now creates an **internal ALB + listener** (`alb.tf`) forwarding to the TG; the ALB carries no real traffic, it only drives health checks. New required var `subnet_ids` (>=2 AZs).
   2. ALB emits `Healthy/UnHealthyHostCount` keyed by **(TargetGroup, LoadBalancer)**; a TargetGroup-only alarm sees no data and never fires. `alarm.tf` now includes the `LoadBalancer` dimension.
 - Real-AWS proof: unreachable stand-in target → `unhealthy` → `UnHealthyHostCount=1` → ratio 1.0 sustained 2 periods → ALARM → SNS → SQS message. Module applies and destroys cleanly. All sandbox resources torn down.
-- **Next:** the switch Lambda (`cmd/switch-lambda`, reuses `pkg/actuator`) subscribing to the SNS topic; then a full live demo (EKS + observer fleet + reachable Couchbase).
+- **Next:** a full live demo (EKS + observer fleet + reachable Couchbase + the switch Lambda end to end).
+
+## Distributed-quorum switch Lambda (2026-06-24)
+
+The SNS-triggered actuation for path 2, in this repo (not a separate repo), reusing `pkg/actuator`.
+
+- `pkg/event`: parse the SNS-wrapped CloudWatch alarm; actionable only on ALARM (OK ignored, no auto-failback). Unit tested.
+- `pkg/switchhandler`: on ALARM, call `actuator.Switch`; OK/empty are no-ops. Unit tested with `actuator.Mock`.
+- `cmd/switch-lambda`: `lambda.Start`, builds `actuator.K8sActuator` from env (NAMESPACE/CONFIGMAP/CONFIG_KEY/DEPLOYMENTS/SECONDARY_CONN/DRY_RUN); client via KUBECONFIG or in-cluster. Has a one-shot mode (`ONESHOT_EVENT`) for the kind e2e. Builds linux/arm64 (`bootstrap`).
+- `deploy/aws/lambda/`: own Terraform root (Lambda + SNS subscription + IAM + optional VPC); takes `switch_sns_topic_arn` from the aggregation module's output. `build.sh` produces the binary; `terraform validate` green.
+- Tests: kind real-switch e2e (`test/kind/switch_lambda_e2e.sh`, PASS: ALARM switches + rolls, OK no-op) and LocalStack SNS->Lambda trigger flow (`test/aws/lambda_localstack.sh`, PASS: real binary invoked by SNS, parses the alarm). Units green.
+- EKS-from-Lambda auth (access entry + kubeconfig/token) is environment-specific and documented in `deploy/aws/lambda/README.md`; not exercised here (no EKS cluster).
+- Branch `switch-lambda`.
 
 ## History: Observer implementation (through Task 12)
 

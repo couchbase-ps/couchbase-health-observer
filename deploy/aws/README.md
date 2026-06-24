@@ -4,7 +4,7 @@ Terraform for the distributed-quorum failover path: instead of one centralized o
 owning the decision, run the observer health endpoint as a fleet and let AWS-managed
 primitives aggregate the result. This module is the **aggregation layer**: it turns the
 per-instance `/health/couchbase` results into one quorum decision and publishes it to an
-SNS topic. The SNS-triggered switch Lambda (the actuation) is a separate, later piece.
+SNS topic. The SNS-triggered switch Lambda (the actuation) lives in `deploy/aws/lambda/`.
 
 ## Architecture
 

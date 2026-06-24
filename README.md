@@ -215,7 +215,9 @@ Tests are grouped by stack under `test/<stack>/`, and each stack is **fully inde
 | compose | `./test/compose/e2e.sh` | Docker | Detector e2e: baseline UP → kill a node → DOWN → auto-failover → UP. Auto-cleans up. |
 | kind (render) | `./test/kind/render.sh` | helm, kubectl | Render-only: builds the chart dependency, asserts both regions + manifests template correctly. Fast, no cluster created. |
 | kind (switch) | `./test/kind/e2e_switch.sh` | docker, kind, kubectl, helm | Active-mode e2e: installs both regions, scenario A (no switch) + scenario B (switch + rollout). Creates and deletes its own kind cluster. `KEEP_KIND=1` keeps it. |
-| aws (localstack) | `./test/aws/localstack.sh` | terraform, localstack (elbv2 tier), tflocal, awslocal | Distributed-quorum aggregation infra: applies the Terraform and asserts the target group, internal ALB→listener→TG, quorum alarm (TG+LB dims), and SNS shapes. Creates an ephemeral VPC + subnets, tears down. |
+| kind (switch-lambda) | `./test/kind/switch_lambda_e2e.sh` | kind, kubectl, go | Runs the switch Lambda binary one-shot against kind: a synthetic ALARM flips `cb-conn` to the secondary and rolls the app; an OK event is a no-op. Creates and deletes its own cluster. |
+| aws (localstack infra) | `./test/aws/localstack.sh` | terraform, localstack (elbv2 tier), tflocal, awslocal | Distributed-quorum aggregation infra: applies the Terraform and asserts the target group, internal ALB→listener→TG, quorum alarm (TG+LB dims), and SNS shapes. Creates an ephemeral VPC + subnets, tears down. |
+| aws (localstack lambda) | `./test/aws/lambda_localstack.sh` | localstack (lambda+sns), awslocal, go | SNS → Lambda trigger flow: deploys the real switch-lambda binary, publishes an alarm, confirms SNS invokes it and it parses the event. Self-cleans. |
 | aws (real account) | `VPC_ID=… SUBNET_IDS=…,… ./test/aws/aws.sh` | terraform, aws CLI, authenticated AWS | Real-AWS fidelity: applies the module, registers an unreachable stand-in target (no compute), and confirms `UnHealthyHostCount` → quorum alarm `ALARM` → SNS delivered to a temp SQS queue. Tears everything down (`KEEP=1` to keep). |
 
 Each stack is isolated: `compose` only touches Docker Compose, `kind` only its own kind cluster, `aws` only Terraform/LocalStack or your AWS account. None share state, so they can run in any order or alone.
@@ -226,13 +228,17 @@ Each stack is isolated: `compose` only touches Docker Compose, `kind` only its o
 pkg/svchealth/        SDK per-service health detector (types, prober, Compute, HTTP handler)
 pkg/state/            anti-flap state machine (FailoverDelay, cold-start arm gate)
 pkg/actuator/         Kubernetes actuator (ConfigMap swap + rollout-restart)
+pkg/event/            parse the SNS-wrapped CloudWatch alarm (switch Lambda)
+pkg/switchhandler/    actuate the switch only on ALARM, reusing pkg/actuator (switch Lambda)
 cmd/svchealthcheck/   server + active control loop
+cmd/switch-lambda/    SNS-triggered Lambda for the distributed-quorum path
 deploy/compose/       5-node Couchbase EE 8.0.1 compose harness (compose detector stack)
 deploy/kind/          kind cluster, official Couchbase Helm chart wrapper, mock app, observer (kind switch stack)
 deploy/aws/           distributed-quorum AWS aggregation: monitoring target group + quorum alarm + SNS (Terraform)
+deploy/aws/lambda/    switch Lambda Terraform (SNS subscription + IAM + optional VPC)
 test/compose/         compose stack e2e
-test/kind/            kind stack render + switch e2e
-test/aws/             aws stack localstack assertions
+test/kind/            kind stack render + switch + switch-lambda e2e
+test/aws/             aws stack localstack + real-account scripts
 HANDOFF.md            running build/handoff log
 AGENTS.md             operating rules for any agent working in this repo
 ```
