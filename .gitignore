@@ -4,3 +4,10 @@
 .idea/
 .DS_Store
 /deploy/kind/couchbase-cluster/charts/
+
+# Terraform (deploy/aws)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+*.tfplan
