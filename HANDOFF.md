@@ -4,8 +4,21 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 
 ## State
 
-- **Branch:** `observer-kind-switch-e2e`
-- **Phase:** Observer implementation plan complete through Task 12.
+- **Branch:** `aws-quorum-infra` (path-2 AWS aggregation; centralized observer path is on `main`).
+- **Phase:** Observer implementation plan complete through Task 12. Path-2 distributed-quorum AWS aggregation infra (plan 2) built.
+
+## Distributed-quorum path 2: AWS aggregation infra (2026-06-24)
+
+CBSE-22993 path-2 actuation. Reuse the observer health endpoint (observe-mode fleet) instead of a per-app Spring starter, so plan 1 (Spring starter) is skipped. This pass = plan 2 only (infra up to SNS); the switch Lambda (plan 3) is deferred to `cmd/switch-lambda`, reusing `pkg/actuator`.
+
+- `deploy/aws/` Terraform: monitoring-only target group (`/health/couchbase`, 200 healthy / 503 unhealthy, no listener); metric-math quorum alarm (`unhealthy/(unhealthy+healthy) >= quorum_threshold` for `sustained_periods`, `treatMissingData=notBreaching`, no `ok_actions`); SNS topic. Outputs: TG arn, SNS arn, alarm name.
+- `deploy/aws/k8s/`: observe-mode observer fleet Deployment (N replicas, AZ topology spread) + Service; TargetGroupBinding. Probes use `/healthz` (static) so a Couchbase-DOWN keeps pods Ready/registered; only the ALB TG checks `/health/couchbase`.
+- Tests live under `test/aws/localstack.sh` (asserts TG health path, alarm comparator, SNS topic). Test stacks were split into `test/{compose,kind,aws}`, each independently runnable.
+- Validated: `terraform validate` + `terraform fmt -check` green; k8s YAML parses. NOT yet run on LocalStack (needs LocalStack Pro + tflocal/awslocal + Docker) or an AWS sandbox (real ALB `UnHealthyHostCount` fidelity = `deploy/aws/README.md` runbook).
+- **Next:** run LocalStack shape check, then AWS-sandbox fidelity + Emirates demo; then build plan 3 switch Lambda (`cmd/switch-lambda`).
+
+## History: Observer implementation (through Task 12)
+
 - **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
 - **Done:** repo bootstrap, compose, AGENTS/CLAUDE; Tasks 1-4 green (types, prober, Compute, gocb prober).
 - **Done:** SDK per-service detector COMPLETE (Tasks 1-7, e2e green). Observer deploys in compose, reports correct per-service / global health through auto-failover.
