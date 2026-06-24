@@ -65,19 +65,23 @@ group (output `monitoring_alb_security_group_id`) so the health checks reach the
 
 ## Test on LocalStack (shape/flow)
 
-Proves the Terraform applies and the resources have the right shape (target group, ALB +
-listener → TG, alarm with both dimensions, SNS). It does **not** prove real ALB metric
-emission (LocalStack limitation) — that is the AWS check below.
+`test/aws/localstack.sh` has two phases (`PHASE=infra|lambda|all`, default `all`). The
+`infra` phase proves the Terraform applies and the resources have the right shape (target
+group, ALB + listener → TG, alarm with both dimensions, SNS). It does **not** prove real
+ALB metric emission (LocalStack limitation) — that is the AWS check below.
 
-Requires Docker and LocalStack with a license tier that **includes `elbv2`** (plus
-`cloudwatch` and `sns`). The freemium tier excludes `elbv2`, so the apply fails on the
-target group with `501 ... elbv2 service is not included within your LocalStack license`.
+**LocalStack tier:** the `infra` phase needs a tier that **includes `elbv2`** (plus
+`cloudwatch` and `sns`); the freemium tier excludes `elbv2` and the apply then fails on
+the target group with `501 ... elbv2 service is not included within your LocalStack
+license`. The `lambda` phase (the switch Lambda trigger flow) uses only `lambda` + `sns`,
+so it runs on the **free / community tier**.
 
 ```bash
 pip install terraform-local awscli-local
-localstack auth set-token <token>   # or export LOCALSTACK_AUTH_TOKEN=...
+localstack auth set-token <token>      # only needed for infra/all (elbv2 tier)
 localstack start -d
-./test/aws/localstack.sh             # creates an ephemeral VPC + subnets, asserts, tears down
+PHASE=infra  ./test/aws/localstack.sh  # aggregation infra shapes (needs elbv2 tier)
+PHASE=lambda ./test/aws/localstack.sh  # SNS -> switch lambda trigger (free tier)
 ```
 
 ## Apply + fidelity check (AWS account)

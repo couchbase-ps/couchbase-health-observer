@@ -29,7 +29,7 @@ The SNS-triggered actuation for path 2, in this repo (not a separate repo), reus
 - `pkg/switchhandler`: on ALARM, call `actuator.Switch`; OK/empty are no-ops. Unit tested with `actuator.Mock`.
 - `cmd/switch-lambda`: `lambda.Start`, builds `actuator.K8sActuator` from env (NAMESPACE/CONFIGMAP/CONFIG_KEY/DEPLOYMENTS/SECONDARY_CONN/DRY_RUN); client via KUBECONFIG or in-cluster. Has a one-shot mode (`ONESHOT_EVENT`) for the kind e2e. Builds linux/arm64 (`bootstrap`).
 - `deploy/aws/lambda/`: own Terraform root (Lambda + SNS subscription + IAM + optional VPC); takes `switch_sns_topic_arn` from the aggregation module's output. `build.sh` produces the binary; `terraform validate` green.
-- Tests: kind real-switch e2e (`test/kind/switch_lambda_e2e.sh`, PASS: ALARM switches + rolls, OK no-op) and LocalStack SNS->Lambda trigger flow (`test/aws/lambda_localstack.sh`, PASS: real binary invoked by SNS, parses the alarm). Units green.
+- Tests: kind real-switch e2e (`test/kind/switch_lambda_e2e.sh`, PASS: ALARM switches + rolls, OK no-op) and the LocalStack SNS->Lambda trigger flow (`PHASE=lambda ./test/aws/localstack.sh`, PASS, free tier). The `localstack.sh` script is phased: `PHASE=infra` (aggregation shapes, needs elbv2 tier), `PHASE=lambda` (lambda+sns, free tier), `PHASE=all` (default). Units green.
 - EKS-from-Lambda auth (access entry + kubeconfig/token) is environment-specific and documented in `deploy/aws/lambda/README.md`; not exercised here (no EKS cluster).
 - Branch `switch-lambda`.
 

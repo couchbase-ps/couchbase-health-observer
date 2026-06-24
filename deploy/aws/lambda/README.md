@@ -64,5 +64,5 @@ is the environment-specific wiring.
 
 - Unit: event parsing (`pkg/event`) and the actuate-only-on-ALARM handler (`pkg/switchhandler`).
 - Real switch on Kubernetes: `test/kind/switch_lambda_e2e.sh` (kind; ALARM switches + rolls, OK is a no-op).
-- SNS → Lambda trigger wiring: `test/aws/lambda_localstack.sh` (LocalStack; real binary invoked by SNS).
+- SNS → Lambda trigger wiring: `PHASE=lambda ./test/aws/localstack.sh` (LocalStack; real binary invoked by SNS; runs on the free tier, no elbv2 license needed).
 - `terraform validate` for this module.
