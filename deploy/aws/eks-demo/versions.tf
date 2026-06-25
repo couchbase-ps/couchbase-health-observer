@@ -1,10 +1,10 @@
 terraform {
   required_version = ">= 1.7.0"
   required_providers {
-    aws        = { source = "hashicorp/aws", version = "~> 5.60" }
-    helm       = { source = "hashicorp/helm", version = "~> 2.13" }
-    kubernetes = { source = "hashicorp/kubernetes", version = "~> 2.30" }
-    kubectl    = { source = "gavinbunney/kubectl", version = "~> 1.14" }
+    aws        = { source = "hashicorp/aws", version = "~> 6.0" }
+    helm       = { source = "hashicorp/helm", version = "~> 3.0" }
+    kubernetes = { source = "hashicorp/kubernetes", version = "~> 2.38" }
+    kubectl    = { source = "gavinbunney/kubectl", version = "~> 1.19" }
     archive    = { source = "hashicorp/archive", version = "~> 2.0" }
   }
 }
@@ -26,8 +26,9 @@ provider "kubernetes" {
   token                  = data.aws_eks_cluster_auth.this.token
 }
 
+# helm provider v3: kubernetes config is an attribute (object), not a nested block.
 provider "helm" {
-  kubernetes {
+  kubernetes = {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
     token                  = data.aws_eks_cluster_auth.this.token

@@ -2,14 +2,14 @@ data "aws_caller_identity" "current" {}
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.24"
+  version = "~> 21.0"
 
-  cluster_name    = var.name
-  cluster_version = var.cluster_version
+  name               = var.name
+  kubernetes_version = var.cluster_version
 
-  cluster_endpoint_public_access  = true
-  cluster_endpoint_private_access = true # so in-VPC clients (the switch Lambda) reach the API
-  enable_irsa                     = true
+  endpoint_public_access  = true
+  endpoint_private_access = true # so in-VPC clients (the switch Lambda) reach the API
+  enable_irsa             = true
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets

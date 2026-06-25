@@ -1,10 +1,10 @@
 # AWS Load Balancer Controller: needed so the TargetGroupBinding registers the observer
 # pods into the monitoring target group.
 module "alb_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.44"
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts"
+  version = "~> 6.0"
 
-  role_name                              = "${var.name}-alb-controller"
+  name                                   = "${var.name}-alb-controller"
   attach_load_balancer_controller_policy = true
 
   oidc_providers = {
@@ -22,30 +22,33 @@ resource "helm_release" "alb" {
   namespace  = "kube-system"
   version    = "1.8.1"
 
-  set {
-    name  = "clusterName"
-    value = module.eks.cluster_name
-  }
-  set {
-    name  = "serviceAccount.create"
-    value = "true"
-  }
-  set {
-    name  = "serviceAccount.name"
-    value = "aws-load-balancer-controller"
-  }
-  set {
-    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = module.alb_irsa.iam_role_arn
-  }
-  set {
-    name  = "region"
-    value = var.region
-  }
-  set {
-    name  = "vpcId"
-    value = module.vpc.vpc_id
-  }
+  # helm provider v3: `set` is a list-of-objects attribute, not repeated blocks.
+  set = [
+    {
+      name  = "clusterName"
+      value = module.eks.cluster_name
+    },
+    {
+      name  = "serviceAccount.create"
+      value = "true"
+    },
+    {
+      name  = "serviceAccount.name"
+      value = "aws-load-balancer-controller"
+    },
+    {
+      name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+      value = module.alb_irsa.arn
+    },
+    {
+      name  = "region"
+      value = var.region
+    },
+    {
+      name  = "vpcId"
+      value = module.vpc.vpc_id
+    },
+  ]
 
   depends_on = [module.eks]
 }
