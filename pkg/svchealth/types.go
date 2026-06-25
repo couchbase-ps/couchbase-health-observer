@@ -12,9 +12,9 @@ type ServiceHealth struct {
 
 // Report is the detailed health document served at /health/couchbase.
 type Report struct {
-	Status    string                   `json:"status"`    // global: DOWN if any critical service DOWN, else UP
-	Critical  []string                 `json:"critical"`  // configured critical services
-	Services  map[string]ServiceHealth `json:"services"`  // every probed service
+	Status    string                   `json:"status"`   // global: DOWN if any critical service DOWN, else UP
+	Critical  []string                 `json:"critical"` // configured critical services
+	Services  map[string]ServiceHealth `json:"services"` // every probed service
 	Reason    string                   `json:"reason"`
 	CheckedAt string                   `json:"checkedAt"` // RFC3339
 }

@@ -118,8 +118,8 @@ resource "aws_lambda_function" "switch" {
 
   environment {
     variables = {
-      SECONDARY_CONN = var.secondary_conn
-      DEPLOYMENTS    = var.deployments
+      SECONDARY_CONN   = var.secondary_conn
+      DEPLOYMENTS      = var.deployments
       NAMESPACE        = var.namespace
       CONFIGMAP        = var.configmap
       CONFIG_KEY       = var.config_key
