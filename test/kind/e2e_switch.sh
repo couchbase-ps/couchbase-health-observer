@@ -7,12 +7,49 @@ OBSERVER_IMAGE="${OBSERVER_IMAGE:-couchbase-health-observer:dev}"
 KEEP_KIND="${KEEP_KIND:-0}"
 CB_CHART="$ROOT/deploy/kind/couchbase-cluster"
 
+# Mode: full automated test (default), or a manual demo driver.
+#   e2e_switch.sh         full e2e (build, install, scenario A + B asserts, teardown)
+#   e2e_switch.sh up      build + install + wait baseline + pause region-a, then STOP (no asserts, no teardown)
+#   e2e_switch.sh down    delete the kind cluster
+MODE="${1:-test}"
+
 for command in docker kind kubectl helm; do
   command -v "$command" >/dev/null || {
     echo "FAIL: required command not found: $command"
     exit 1
   }
 done
+
+if [[ "$MODE" == "down" ]]; then
+  echo "== deleting kind cluster: $KIND_CLUSTER =="
+  kind delete cluster --name "$KIND_CLUSTER" || true
+  echo "done"; exit 0
+fi
+
+cheatsheet() {
+  cat <<'EOF'
+
+================== KIND DEMO READY ==================
+Couchbase UI (region-a): kubectl -n region-a port-forward svc/region-a-ui 8091:8091
+   then open http://localhost:8091           (Administrator / password)
+Couchbase UI (region-b): kubectl -n region-b port-forward svc/region-b-ui 8092:8091
+   then open http://localhost:8092
+Observer API : kubectl port-forward deployment/observer 8080:8080
+   then curl -s http://localhost:8080/health/couchbase | jq
+Observer logs: kubectl logs -f deployment/observer
+App logs     : kubectl logs -f -l app=mock-app      (shows connstring=...region-a/b...)
+cb-conn now  : kubectl get configmap cb-conn -o jsonpath='{.data.connstring}'
+
+region-a operator is PAUSED, so killed pods are NOT rescheduled (real outage).
+  Absorbed loss (NO switch): kill ONE node, e.g.
+     kubectl delete pod region-a-0000 -n region-a --force --grace-period=0
+  Full outage (SWITCH): kill the whole region
+     kubectl delete pod -n region-a -l couchbase_cluster=region-a --force --grace-period=0
+   -> observer flips cb-conn to region-b and rolls mock-app within ~30-60s.
+Teardown     : test/kind/e2e_switch.sh down
+====================================================
+EOF
+}
 
 cleanup() {
   if [[ "$KEEP_KIND" != "1" ]]; then
@@ -109,6 +146,14 @@ echo "baseline OK: cb-conn=$BASELINE"
 echo "== pause region-a operator reconciliation =="
 kubectl patch couchbasecluster region-a --namespace region-a \
   --type=merge -p '{"spec":{"paused":true}}'
+
+# Manual demo: everything is up, baseline on region-a, operator paused so a kill is a
+# real outage. Keep the cluster and hand control to the presenter.
+if [[ "$MODE" == "up" ]]; then
+  KEEP_KIND=1
+  cheatsheet
+  exit 0
+fi
 
 # Scenario A: lose ONE region-a node. With 5 nodes + replica 1 and a 5s
 # auto-failover timeout, Couchbase absorbs it well inside the 30s FailoverDelay,
