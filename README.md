@@ -81,6 +81,20 @@ above (pull requests build only, no push). Needs repo secrets `DOCKERHUB_USERNAM
 `DOCKERHUB_TOKEN`. Tagging a `vX.Y.Z` release also generates the changelog and a GitHub
 release (`.github/workflows/release.yml`, git-cliff + `cliff.toml`).
 
+## Prebuilt binaries (run without Docker)
+
+Each `vX.Y.Z` release attaches static, cross-OS `svchealthcheck` binaries (built by
+`release.yml`) plus a `checksums.txt`:
+
+- `linux` / `darwin` / `windows` × `amd64` / `arm64`
+- archive name: `couchbase-health-observer_vX.Y.Z_<os>_<arch>.{tar.gz,zip}`
+
+Download, extract, and run the binary directly (it's CGO-free, no dependencies):
+
+```bash
+./svchealthcheck --conn couchbase://<host> --critical kv   # observe mode
+```
+
 Build locally (multi-arch) with buildx:
 
 ```bash
