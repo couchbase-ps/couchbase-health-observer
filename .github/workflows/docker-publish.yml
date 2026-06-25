@@ -1,21 +1,23 @@
 name: Publish observer image
 
-# Build the multi-arch observer image and push it to Docker Hub. Pull requests build
-# only (no push). Pushes to main publish dev tags (edge + sha-<sha>) but NOT latest;
-# only a v* release tag gets the semver tags and latest.
+# Build the multi-arch observer image and push it to Docker Hub, gated on CI (ci.yml).
+# Pushes to main publish dev tags (edge + sha-<sha>) but NOT latest; only a v* release tag
+# gets the semver tags and latest. (Pull requests are covered by ci.yml directly.)
 on:
   push:
     branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
   IMAGE: tayebchlyah/couchbase-health-observer
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build-push:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,9 +28,7 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Only authenticate when we intend to push (not on pull_request).
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -54,7 +54,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

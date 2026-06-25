@@ -1,0 +1,51 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "⬆️ "
+    groups:
+      go-modules:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "⬆️ "
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "⬆️ "
+
+  - package-ecosystem: "terraform"
+    directories:
+      - "/deploy/aws"
+      - "/deploy/aws/lambda"
+      - "/deploy/aws/eks-demo"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "⬆️ "
+    groups:
+      terraform:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

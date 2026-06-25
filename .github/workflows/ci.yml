@@ -1,0 +1,51 @@
+name: CI
+
+# Fast gate: Go fmt/vet/build/unit tests + Terraform fmt/validate. Runs on pull requests,
+# and is called (workflow_call) by docker-publish.yml and release.yml so an image or
+# release is only produced when this is green. Heavy e2e (compose / kind / AWS) is not run
+# here -- it is slow/flaky/costly and lives in the manual scripts under test/.
+on:
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive deploy/aws
+
+      - name: terraform validate
+        run: |
+          for d in deploy/aws deploy/aws/lambda deploy/aws/eks-demo; do
+            echo "== $d =="
+            terraform -chdir="$d" init -backend=false -input=false >/dev/null
+            terraform -chdir="$d" validate
+          done
