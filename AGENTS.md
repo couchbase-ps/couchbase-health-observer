@@ -37,6 +37,7 @@ HANDOFF.md            running progress log — READ THIS to see what is done and
 - **TDD**: failing test first, run red, implement, run green, commit. Small focused files, one responsibility each.
 - Dependencies behind **interfaces** with mocks (e.g. `Prober`) so logic is unit-testable without a cluster.
 - **Frequent commits**, one logical step each. **Rebase, never merge** (linear history).
+- **Commit convention: gitmoji** (not Conventional Commits). Subject = `<emoji>(scope) #<issue>: <desc>` (scope and `#issue` optional), e.g. `✨(svchealth) #1: per-service rollup`, `🐛(eks-demo) #6: ...`, `📝 #5: ...`, `🎉 bootstrap`. Map: ✨ feature, 🐛 fix, 📝 docs, ✅ tests, ♻️ refactor, ⚡️ perf, 👷 CI, 🐳 docker/build, 🔧 tooling/config, 🎉 project init, 💥 breaking. `cliff.toml` groups these for the changelog (git-cliff); releases are cut by pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
 - Integration tests build-tagged `//go:build integration`, need compose cluster up.
 - **Docs stay compressed.** `AGENTS.md`, `CLAUDE.md`, `HANDOFF.md` maintained in caveman-speak (terse, articles/filler dropped, code/commands/paths/tables exact). After editing any of them, recompress: `/caveman:compress <file>` if the caveman skill is available, else compress inline by hand. No `.original.md` backups — git is the history.
 

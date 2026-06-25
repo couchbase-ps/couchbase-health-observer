@@ -2,6 +2,15 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## Commit convention + release (2026-06-24)
+
+Adopted **gitmoji** commits (matching `ps-knowledge-hub`): `<emoji>(scope) #<issue>: <desc>`.
+`cliff.toml` (git-cliff) groups them for the changelog; `.github/workflows/release.yml`
+cuts a GitHub release on a `vX.Y.Z` tag. Docker image tagging: **main -> `edge` + `sha-<sha>`
+(no `latest`); `vX.Y.Z` tag -> semver + `latest`** (`docker-publish.yml`, `flavor: latest=auto`).
+The entire existing history was rewritten conventional -> gitmoji (force-push pending; not
+yet pushed). Convention documented in AGENTS.md.
+
 ## State
 
 - **Branch:** `aws-quorum-infra` (path-2 AWS aggregation; centralized observer path is on `main`).
