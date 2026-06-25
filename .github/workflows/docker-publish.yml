@@ -1,7 +1,8 @@
 name: Publish observer image
 
 # Build the multi-arch observer image and push it to Docker Hub. Pull requests build
-# only (no push) as a check; pushes to main and version tags publish.
+# only (no push). Pushes to main publish dev tags (edge + sha-<sha>) but NOT latest;
+# only a v* release tag gets the semver tags and latest.
 on:
   push:
     branches: [main]
@@ -38,11 +39,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # main -> edge + sha-<sha> (dev). v* tag -> semver tags. latest=auto applies
+          # `latest` only on a semver tag, never on a plain main push.
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=edge,branch=main
+            type=sha
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha
+          flavor: |
+            latest=auto
 
       - name: Build and push
         uses: docker/build-push-action@v6

@@ -1,0 +1,40 @@
+name: Release
+
+# On a v* tag, generate the changelog from the gitmoji commit history (git-cliff +
+# cliff.toml) and publish a GitHub release. The observer image is built/pushed by
+# docker-publish.yml, which also triggers on v* tags.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create/update release
+        uses: ncipollo/release-action@v1.21.0
+        with:
+          allowUpdates: true
+          draft: false
+          makeLatest: true
+          name: ${{ github.ref_name }}
+          body: ${{ steps.git-cliff.outputs.content }}
+          token: ${{ github.token }}

@@ -1,0 +1,54 @@
+[changelog]
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+
+{% for commit in commits %}
+{%- set title = commit.message | split(pat="\n") | first | trim | split(pat=" (#") | first -%}
+{%- if commit.scope -%}
+{%- set clean_title = title | split(pat="(" ~ commit.scope ~ ")") | last | trim | trim_start_matches(pat=":") | trim -%}
+- [`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/couchbase-ps/couchbase-health-observer/commit/{{ commit.id }}) - **{{ commit.scope }}**: {{ clean_title }}{% if commit.remote.pr_number and commit.remote.username %} *(PR [#{{ commit.remote.pr_number }}](https://github.com/couchbase-ps/couchbase-health-observer/pull/{{ commit.remote.pr_number }}) by [@{{ commit.remote.username }}](https://github.com/{{ commit.remote.username }}))*{% elif commit.remote.username %} *(commit by [@{{ commit.remote.username }}](https://github.com/{{ commit.remote.username }}))*{% elif commit.author.name %} *(commit by {{ commit.author.name }})*{% endif %}
+{% else %}
+{%- set first_token = title | split(pat=" ") | first -%}
+{%- set clean_title = title | replace(from=first_token ~ " ", to="") -%}
+- [`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/couchbase-ps/couchbase-health-observer/commit/{{ commit.id }}) - {{ clean_title }}{% if commit.remote.pr_number and commit.remote.username %} *(PR [#{{ commit.remote.pr_number }}](https://github.com/couchbase-ps/couchbase-health-observer/pull/{{ commit.remote.pr_number }}) by [@{{ commit.remote.username }}](https://github.com/{{ commit.remote.username }}))*{% elif commit.remote.username %} *(commit by [@{{ commit.remote.username }}](https://github.com/{{ commit.remote.username }}))*{% elif commit.author.name %} *(commit by {{ commit.author.name }})*{% endif %}
+{%- endif %}
+{% endfor %}
+{% endfor %}
+"""
+
+trim = true
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+filter_commits = true
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
+sort_commits = "oldest"
+commit_preprocessors = [
+  { pattern = '^(💥|✨️|✨|🎉|🌱|🚩|🥚|👔|🌐|✈️|🦖|🐛|🚑️|🩹|🥅|⚡️|🧵|🔒️|🔒|🔐|🛂|🦺|✅|🧪|🤡|🧐|⚗️|🚨|♻️|🔥|🗑️|⚰️|💩|⏪️|📝|✏️|💬|💡|📄|👥|🔍️|🎨|💄|♿️|🚸|📱|💫|🍱|📸|⬆️|⬆|⬇️|⬇|➕|➖|📌|👽️|👷|🚀|🔧|🔨|🚚|📦️|📦|🧱|🩺|💚|🔀|🙈|💸|🧑‍💻|🐳️|🐳|🏗️|🗃️|📈|🏷️|🔊|🔇|🔖|🚧|🍻)([^\s(])', replace = "$1 $2" },
+  { pattern = ' ️', replace = '' },
+  { pattern = '^(\S+\)):\s*', replace = "$1 " },
+  { pattern = '^(\S+) #[0-9]+:\s*', replace = "$1 " },
+]
+
+commit_parsers = [
+  { message = "^(?:💥)(?:\\(([^)]+)\\))?", group = "💥 Breaking Changes", scope = "${1}" },
+  { message = "^(?:✨️|✨)\\s+fix\\(([^)]+)\\)", group = "🐛 Bug Fixes", scope = "${1}" },
+  { message = "^(?:✨|✨️|🎉|🌱|🚩|🥚|👔|🌐|✈️|🦖)(?:\\(([^)]+)\\))?", group = "✨ New Features", scope = "${1}" },
+  { message = "^(?:🐛|🚑️|🩹|🥅)(?:\\(([^)]+)\\))?", group = "🐛 Bug Fixes", scope = "${1}" },
+  { message = "^(?:⚡️|🧵)(?:\\(([^)]+)\\))?", group = "⚡️ Performance", scope = "${1}" },
+  { message = "^(?:🔒|🔒️|🔐|🛂|🦺)(?:\\(([^)]+)\\))?", group = "🔒 Security", scope = "${1}" },
+  { message = "^(?:✅|🧪|🤡|🧐|⚗️|🚨)(?:\\(([^)]+)\\))?", group = "🧪 Tests & Quality", scope = "${1}" },
+  { message = "^(?:♻️|🔥|🗑️|⚰️|💩|⏪️)(?:\\(([^)]+)\\))?", group = "♻️ Refactors & Cleanup", scope = "${1}" },
+  { message = "^(?:📝|✏️|💬|💡|📄|👥|🔍️)(?:\\(([^)]+)\\))?", group = "📝 Documentation & Content", scope = "${1}" },
+  { message = "^(?:🎨|💄|♿️|🚸|📱|💫|🍱|📸)(?:\\(([^)]+)\\))?", group = "🎨 UI/UX & Accessibility", scope = "${1}" },
+  { message = "^(?:⬆|⬇|⬆️|⬇️|➕|➖|📌|👽️)(?:\\(([^)]+)\\))?", group = "📦 Dependencies", scope = "${1}" },
+  { message = "^(?:👷|🚀|🔧|🔨|🚚|📦|📦️|🧱|🩺|💚|🔀|🙈|💸|🧑‍💻|🐳|🐳️)(?:\\(([^)]+)\\))?", group = "🔧 Infrastructure & DevOps", scope = "${1}" },
+  { message = "^(?:🏗️|🗃️|📈|🏷️)(?:\\(([^)]+)\\))?", group = "🏗️ Architecture & Data", scope = "${1}" },
+  { message = "^(?:🔊|🔇)(?:\\(([^)]+)\\))?", group = "🔊 Logging", scope = "${1}" },
+  { message = "^(?:🔖)(?:\\(([^)]+)\\))?", group = "🔖 Release & Versioning", scope = "${1}" },
+  { message = "^(?:🚧)(?:\\(([^)]+)\\))?", group = "🚧 Work In Progress", scope = "${1}" },
+  { message = "^(?:🍻)(?:\\(([^)]+)\\))?", group = "🍻 Miscellaneous", scope = "${1}" },
+  { message = ".*", group = "🔹 Other Changes" },
+]
