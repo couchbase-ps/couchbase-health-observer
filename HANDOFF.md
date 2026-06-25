@@ -35,7 +35,7 @@ CBSE-22993 path-2 actuation. Reuse the observer health endpoint (observe-mode fl
 `deploy/aws/eks-demo/` stands up the entire distributed-quorum architecture on real EKS:
 VPC + EKS + node group, AWS Load Balancer Controller (IRSA), 2 Couchbase clusters via the
 official Operator chart (region-a slim 3-data primary, region-b 1-data secondary), mock
-app, observer fleet (Docker Hub image `tayebchlyah/couchbase-health-observer`), reused
+app, observer fleet (ghcr image `ghcr.io/couchbase-ps/couchbase-health-observer`), reused
 aggregation + switch-lambda modules, and an EKS access entry for the Lambda role. The
 Lambda authenticates to EKS via `pkg/eksauth` (STS token) using `EKS_CLUSTER_NAME`.
 
