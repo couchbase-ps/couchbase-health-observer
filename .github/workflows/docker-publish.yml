@@ -1,8 +1,9 @@
 name: Publish observer image
 
-# Build the multi-arch observer image and push it to Docker Hub, gated on CI (ci.yml).
-# Pushes to main publish dev tags (edge + sha-<sha>) but NOT latest; only a v* release tag
-# gets the semver tags and latest. (Pull requests are covered by ci.yml directly.)
+# Build the multi-arch observer image and push it to the GitHub Container Registry
+# (ghcr.io), gated on CI (ci.yml). Pushes to main publish dev tags (edge + sha-<sha>) but
+# NOT latest; only a v* release tag gets the semver tags and latest. Uses the automatic
+# GITHUB_TOKEN (no external registry secrets). (Pull requests are covered by ci.yml.)
 on:
   push:
     branches: [main]
@@ -10,7 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: tayebchlyah/couchbase-health-observer
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   test:
@@ -19,6 +20,9 @@ jobs:
   build-push:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -28,11 +32,12 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Derive tags and labels
         id: meta

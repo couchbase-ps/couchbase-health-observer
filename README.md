@@ -65,21 +65,25 @@ go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # obser
 
 ## Container image
 
-Published multi-arch (`linux/amd64` + `linux/arm64`) to Docker Hub. Tagging policy:
+Published multi-arch (`linux/amd64` + `linux/arm64`) to the GitHub Container Registry
+(`ghcr.io`), under the repo's Packages. Tagging policy:
 
 - push to **main** → `edge` + `sha-<sha>` (dev builds; **no `latest`**)
 - push a **`vX.Y.Z` tag** → `vX.Y.Z`, `X.Y`, and `latest`
 
 ```
-docker.io/tayebchlyah/couchbase-health-observer:edge        # latest main build
-docker.io/tayebchlyah/couchbase-health-observer:vX.Y.Z      # a release
-docker.io/tayebchlyah/couchbase-health-observer:latest      # newest release
+ghcr.io/couchbase-ps/couchbase-health-observer:edge        # latest main build
+ghcr.io/couchbase-ps/couchbase-health-observer:vX.Y.Z      # a release
+ghcr.io/couchbase-ps/couchbase-health-observer:latest      # newest release
 ```
 
 GitHub Actions (`.github/workflows/docker-publish.yml`) builds/pushes per the policy
-above (pull requests build only, no push). Needs repo secrets `DOCKERHUB_USERNAME` and
-`DOCKERHUB_TOKEN`. Tagging a `vX.Y.Z` release also generates the changelog and a GitHub
-release (`.github/workflows/release.yml`, git-cliff + `cliff.toml`).
+above using the automatic `GITHUB_TOKEN` (no external registry secrets; PRs run `ci.yml`
+only). Tagging a `vX.Y.Z` release also generates the changelog and a GitHub release
+(`.github/workflows/release.yml`, git-cliff + `cliff.toml`).
+
+> The package is private until you set it public (repo → Packages → package settings →
+> change visibility), which is needed for pulls from outside the org (e.g. the EKS demo).
 
 ## Prebuilt binaries (run without Docker)
 
@@ -99,7 +103,7 @@ Build locally (multi-arch) with buildx:
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -t tayebchlyah/couchbase-health-observer:dev --push .
+  -t ghcr.io/couchbase-ps/couchbase-health-observer:dev --push .
 ```
 
 ### Flags
