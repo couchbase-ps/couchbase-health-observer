@@ -2,7 +2,7 @@
 # pods into the monitoring target group.
 module "alb_irsa" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.44"
+  version = "~> 6.6"
 
   role_name                              = "${var.name}-alb-controller"
   attach_load_balancer_controller_policy = true
