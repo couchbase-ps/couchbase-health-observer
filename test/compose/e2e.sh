@@ -25,13 +25,17 @@ cheatsheet() {
 Couchbase UI : http://localhost:8091        (Administrator / password)
 Observer API : curl -s http://localhost:8080/health/couchbase | jq
 Observer logs: docker logs -f cb-observer
-Kill a node  : docker stop cb-data-2        (KV goes DOWN, then auto-failover -> UP)
-Restore node : docker start cb-data-2
+
+Escalation (watch status after each):
+  1. docker stop cb-index-query-2   query DOWN, but global stays UP (kv-only critical)
+  2. docker stop cb-data-2          kv DOWN ~10s, then auto-failover -> UP (absorbed)
+  3. docker stop cb-data-3          kv stays DOWN (replica 1, failover refused -> data loss)
+Restore      : docker start cb-data-2 cb-data-3 cb-index-query-2
 Teardown     : test/compose/e2e.sh down
 
-Note: this is a SINGLE Couchbase cluster. The demo shows the observer detecting a
-node loss (DOWN) and Couchbase auto-failover absorbing it (back to UP). There is no
-region switch here -- that is the kind and AWS demos.
+Note: this is a SINGLE Couchbase cluster -- it shows accurate critical-vs-noncritical
+health detection and where auto-failover stops. No region switch here; that is the
+kind and AWS demos.
 =====================================================
 EOF
 }
