@@ -30,15 +30,48 @@ func TestComputeServiceDownEndpoint(t *testing.T) {
 	}
 }
 
-func TestComputeNonCriticalServiceDownStaysUp(t *testing.T) {
-	// query fully down, but app only treats kv as critical -> global UP, query DOWN in detail
+func TestComputeNonCriticalServiceDownDegraded(t *testing.T) {
+	// query fully down, app only treats kv as critical -> global DEGRADED (not UP, not DOWN),
+	// query DOWN in detail.
 	probes := []Probe{p("kv", "d1", true), p("kv", "d2", true), p("query", "q1", false), p("query", "q2", false)}
 	r := Compute(probes, []string{"kv"}, "t")
-	if r.Status != "UP" {
-		t.Fatalf("global = %s, want UP (query not critical)", r.Status)
+	if r.Status != "DEGRADED" {
+		t.Fatalf("global = %s, want DEGRADED (kv up, query down)", r.Status)
 	}
 	if r.Services["query"].Status != "DOWN" {
 		t.Errorf("query should still show DOWN for observability")
+	}
+	if r.Reason != `non-critical service "query" has 2 non reachable endpoint(s)` {
+		t.Errorf("degraded reason wrong: %q", r.Reason)
+	}
+}
+
+func TestComputeCriticalDownBeatsDegraded(t *testing.T) {
+	// Both a critical (kv) and a non-critical (query) service down -> DOWN wins over DEGRADED.
+	probes := []Probe{p("kv", "d1", true), p("kv", "d2", false), p("query", "q1", false)}
+	r := Compute(probes, []string{"kv"}, "t")
+	if r.Status != "DOWN" {
+		t.Fatalf("global = %s, want DOWN (kv critical and down)", r.Status)
+	}
+}
+
+func TestComputeCriticalDownReason(t *testing.T) {
+	// Reason must report NON-reachable endpoint count, not reachable count.
+	probes := []Probe{p("kv", "d1", true), p("kv", "d2", true), p("kv", "d3", false)}
+	r := Compute(probes, []string{"kv"}, "t")
+	if r.Reason != `critical service "kv" has 1 non reachable endpoint(s)` {
+		t.Errorf("critical down reason wrong: %q", r.Reason)
+	}
+}
+
+func TestComputeCriticalNotObservedReason(t *testing.T) {
+	probes := []Probe{p("query", "q1", true)}
+	r := Compute(probes, []string{"kv"}, "t")
+	if r.Status != "DOWN" {
+		t.Fatalf("global = %s, want DOWN", r.Status)
+	}
+	if r.Reason != `critical service "kv" not observed` {
+		t.Errorf("not-observed reason wrong: %q", r.Reason)
 	}
 }
 

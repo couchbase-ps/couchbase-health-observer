@@ -24,12 +24,35 @@ func TestHandlerDownReturns503(t *testing.T) {
 }
 
 func TestHandlerUpReturns200(t *testing.T) {
+	pr := MockProber{Probes: []Probe{p("kv", "d1", true), p("query", "q1", true)}}
+	h := &Handler{Prober: pr, Critical: []string{"kv"}, Now: func() string { return "t" }}
+	req := httptest.NewRequest("GET", "/health/couchbase", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (all services up)", w.Code)
+	}
+	var r Report
+	json.Unmarshal(w.Body.Bytes(), &r)
+	if r.Status != "UP" {
+		t.Errorf("status = %s, want UP", r.Status)
+	}
+}
+
+func TestHandlerDegradedReturns200(t *testing.T) {
+	// Non-critical service down -> DEGRADED, but still served 200: critical kv is fine,
+	// so the ALB target stays healthy and no failover is triggered.
 	pr := MockProber{Probes: []Probe{p("kv", "d1", true), p("query", "q1", false)}}
 	h := &Handler{Prober: pr, Critical: []string{"kv"}, Now: func() string { return "t" }}
 	req := httptest.NewRequest("GET", "/health/couchbase", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (kv up, query not critical)", w.Code)
+		t.Fatalf("status = %d, want 200 (degraded, kv still up)", w.Code)
+	}
+	var r Report
+	json.Unmarshal(w.Body.Bytes(), &r)
+	if r.Status != "DEGRADED" {
+		t.Errorf("status = %s, want DEGRADED", r.Status)
 	}
 }

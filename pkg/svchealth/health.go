@@ -8,7 +8,10 @@ import (
 // Compute rolls per-endpoint probes into per-service health and a global status.
 // A service is DOWN if ANY of its endpoints is unreachable (an unreachable vbucket
 // owner means operations to it fail); UP only if all its endpoints are reachable.
-// Global is DOWN if any critical service is DOWN, else UP.
+// Global status:
+//   - DOWN     if any critical service is DOWN (or not observed)
+//   - DEGRADED if all critical services are UP but a non-critical service is DOWN
+//   - UP       if every observed service is UP
 func Compute(probes []Probe, critical []string, checkedAt string) Report {
 	type agg struct {
 		reachable   int
@@ -41,18 +44,47 @@ func Compute(probes []Probe, critical []string, checkedAt string) Report {
 		services[svc] = ServiceHealth{Status: status, Reachable: a.reachable, Unreachable: a.unreachable}
 	}
 
+	criticalSet := make(map[string]bool, len(critical))
+	for _, svc := range critical {
+		criticalSet[svc] = true
+	}
+
+	// Stable service ordering so the chosen reason is deterministic.
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	global := "UP"
 	reason := "all critical services reachable"
+
+	// A critical service down (or unobserved) is a hard DOWN.
 	for _, svc := range critical {
 		sh, ok := services[svc]
-		if !ok || sh.Status == "DOWN" {
+		if !ok {
 			global = "DOWN"
-			if !ok {
-				reason = fmt.Sprintf("critical service %q not observed", svc)
-			} else {
-				reason = fmt.Sprintf("critical service %q has %d reachable endpoints", svc, sh.Reachable)
-			}
+			reason = fmt.Sprintf("critical service %q not observed", svc)
 			break
+		}
+		if sh.Status == "DOWN" {
+			global = "DOWN"
+			reason = fmt.Sprintf("critical service %q has %d non reachable endpoint(s)", svc, len(sh.Unreachable))
+			break
+		}
+	}
+
+	// All critical services healthy: a non-critical service being down degrades.
+	if global == "UP" {
+		for _, name := range names {
+			if criticalSet[name] {
+				continue
+			}
+			if services[name].Status == "DOWN" {
+				global = "DEGRADED"
+				reason = fmt.Sprintf("non-critical service %q has %d non reachable endpoint(s)", name, len(services[name].Unreachable))
+				break
+			}
 		}
 	}
 
