@@ -27,7 +27,7 @@ Observer API : curl -s http://localhost:8080/health/couchbase | jq
 Observer logs: docker logs -f cb-observer
 
 Escalation (watch status after each):
-  1. docker stop cb-index-query-2   query DOWN, but global stays UP (kv-only critical)
+  1. docker stop cb-index-query-2   query DOWN -> global DEGRADED (non-critical; kv still UP)
   2. docker stop cb-data-2          kv DOWN ~10s, then auto-failover -> UP (absorbed)
   3. docker stop cb-data-3          kv stays DOWN (replica 1, failover refused -> data loss)
 Restore      : docker start cb-data-2 cb-data-3 cb-index-query-2
