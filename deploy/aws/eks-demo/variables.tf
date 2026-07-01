@@ -27,7 +27,7 @@ variable "node_desired_size" {
 variable "observer_image" {
   description = "Observer image (ghcr; the package must be public or use an imagePullSecret)."
   type        = string
-  default     = "ghcr.io/couchbase-ps/couchbase-health-observer:edge"
+  default     = "ghcr.io/couchbase-ps/couchbase-health-observer:latest"
 }
 
 variable "observer_replicas" {
