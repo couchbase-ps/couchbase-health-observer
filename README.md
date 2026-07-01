@@ -1,5 +1,7 @@
 # couchbase-health-observer
 
+Copyright 2026 Couchbase, Inc. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
 A small Go service that watches a Couchbase cluster's health and, optionally, drives
 automated multi-region failover on Kubernetes. Built for the Emirates MCA-replacement
 engagement.
@@ -280,3 +282,17 @@ test/aws/             aws stack localstack + real-account scripts
 HANDOFF.md            running build/handoff log
 AGENTS.md             operating rules for any agent working in this repo
 ```
+
+## License
+
+Copyright 2026 Couchbase, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+project except in compliance with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under
+the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied. See the [LICENSE](LICENSE) file for the specific
+language governing permissions and limitations under the License.
