@@ -19,6 +19,7 @@ import (
 
 	"github.com/couchbase/gocb/v2"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/actuator"
+	"github.com/couchbaselabs/couchbase-health-observer/pkg/metrics"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/probes"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/state"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/svchealth"
@@ -96,6 +97,7 @@ func main() {
 		}
 		return nil
 	}))
+	mux.Handle("/metrics", metrics.Handler())
 	go func() {
 		log.Printf("listening on %s (mode=%s critical=%s)", *addr, *mode, *critical)
 		log.Fatal(http.ListenAndServe(*addr, mux))
@@ -114,6 +116,10 @@ func main() {
 	machine := state.New(state.Config{FailoverDelay: *failoverDelay})
 	log.Printf("active mode: failover-delay=%s secondary=%q deployments=%q dryRun=%v", *failoverDelay, *secondary, *deployments, *dryRun)
 
+	primaryRegion := regionLabel(*conn)
+	secondaryRegion := regionLabel(*secondary)
+	metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(1)
+
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -121,6 +127,20 @@ func main() {
 		probes, _ := prober.Probe(context.Background())
 		rep := svchealth.Compute(probes, crit, time.Now().UTC().Format(time.RFC3339))
 		firstEval.Store(true)
+		metrics.LoopLastTick.Set(float64(time.Now().Unix()))
+		up := 0.0
+		if rep.Status != "DOWN" {
+			up = 1.0
+		}
+		metrics.CouchbaseUp.WithLabelValues(primaryRegion).Set(up)
+		for svc, sh := range rep.Services {
+			s := 0.0
+			if sh.Status == "UP" {
+				s = 1.0
+			}
+			metrics.ServiceUp.WithLabelValues(svc).Set(s)
+		}
+		metrics.SustainedDownSeconds.Set(machine.DownSeconds(time.Now()))
 		res := machine.Observe(rep.Status)
 		log.Printf("status=%s reason=%q switchRequired=%v", rep.Status, rep.Reason, res.SwitchRequired)
 		if res.SwitchRequired {
@@ -131,8 +151,13 @@ func main() {
 			switched, err := act.Switch(context.Background())
 			switch {
 			case err != nil:
+				metrics.FailoverErrors.Inc()
 				log.Printf("actuation failed: %v", err)
 			case switched:
+				metrics.FailoverTotal.Inc()
+				metrics.LastActuationSuccess.Set(float64(time.Now().Unix()))
+				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
+				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
 				log.Printf("SWITCHED to %s", *secondary)
 			default:
 				log.Printf("already on secondary, no-op")
@@ -159,4 +184,17 @@ func mustK8sClient() kubernetes.Interface {
 		log.Fatalf("k8s client: %v", err)
 	}
 	return cs
+}
+
+// regionLabel extracts a short region name from a couchbase:// connstring, e.g.
+// "couchbase://region-a-srv.region-a.svc" -> "region-a". Empty conn -> "none".
+func regionLabel(conn string) string {
+	if conn == "" {
+		return "none"
+	}
+	h := strings.TrimPrefix(conn, "couchbase://")
+	if i := strings.Index(h, "."); i >= 0 {
+		h = h[:i]
+	}
+	return strings.TrimSuffix(h, "-srv")
 }

@@ -62,3 +62,12 @@ func (m *Machine) Observe(status string) Result {
 	}
 	return res
 }
+
+// DownSeconds reports how long the current sustained-DOWN window has lasted, or 0
+// when healthy. Feeds the observer_sustained_down_seconds metric.
+func (m *Machine) DownSeconds(now time.Time) float64 {
+	if !m.inDown {
+		return 0
+	}
+	return now.Sub(m.firstDownAt).Seconds()
+}
