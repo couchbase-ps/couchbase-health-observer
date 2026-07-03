@@ -182,6 +182,20 @@ echo "== scenario B: full region-a outage, expect switch to region-b =="
 kubectl delete pod --namespace region-a -l couchbase_cluster=region-a \
   --force --grace-period=0
 
+echo "== assert liveness stays 200 while Couchbase is DOWN (must NOT restart the observer) =="
+kubectl port-forward deployment/observer 18080:8080 >/tmp/pf-observer.log 2>&1 &
+PF_PID=$!
+sleep 3
+LIVE="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:18080/healthz)"
+READY="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:18080/readyz)"
+kill "$PF_PID" 2>/dev/null || true
+echo "  /healthz=$LIVE /readyz=$READY (during DB outage)"
+[[ "$LIVE" == "200" ]] || { echo "FAIL: liveness not 200 during DB outage (would restart mid-outage)"; exit 1; }
+[[ "$READY" == "200" ]] || { echo "FAIL: readiness not 200 (K8s API still reachable during DB outage)"; exit 1; }
+RESTARTS="$(kubectl get pod -l app=observer -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')"
+[[ "$RESTARTS" == "0" ]] || { echo "FAIL: observer restarted during DB outage (restartCount=$RESTARTS)"; exit 1; }
+echo "observer survived the DB outage without restart (restartCount=0)"
+
 echo "== wait for ConfigMap switch =="
 NEW=""
 for _ in $(seq 1 60); do
