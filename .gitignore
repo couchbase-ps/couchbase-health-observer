@@ -18,3 +18,4 @@ sandbox.tfvars
 # Lambda build artifacts
 deploy/aws/lambda/bootstrap
 *.zip
+.worktrees/
