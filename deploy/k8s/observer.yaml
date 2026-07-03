@@ -1,0 +1,122 @@
+# Centralized Kubernetes Observer (active mode): watches the primary Couchbase
+# cluster and, on a sustained critical outage, repoints the cb-conn ConfigMap to
+# the secondary and rolls the dependent app Deployments.
+#
+# PROBE WIRING (do NOT change): livenessProbe -> /healthz (loop alive),
+# readinessProbe -> /readyz (K8s API reachable). NEVER point either probe at
+# /health/couchbase: a real Couchbase outage would then restart the observer
+# exactly when it must act.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: observer
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: observer
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: observer
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: observer
+subjects:
+  - kind: ServiceAccount
+    name: observer
+    namespace: default
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: observer
+  namespace: default
+  labels:
+    app: observer
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: observer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observer
+  namespace: default
+  labels:
+    app: observer
+spec:
+  replicas: 1 # single active detector; see docs/DEPLOYMENT.md "SPOF & HA" for mitigations
+  selector:
+    matchLabels:
+      app: observer
+  template:
+    metadata:
+      labels:
+        app: observer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: observer
+      containers:
+        - name: observer
+          image: ghcr.io/couchbase-ps/couchbase-health-observer:latest
+          imagePullPolicy: Always
+          args:
+            - --mode=active
+            - --conn=couchbase://region-a-srv.region-a.svc
+            - --secondary-conn=couchbase://region-b-srv.region-b.svc
+            - --bucket=observer
+            - --user=Administrator
+            - --pass=password
+            - --critical=kv
+            - --interval=5s
+            - --failover-delay=150s
+            - --namespace=default
+            - --configmap=cb-conn
+            - --config-key=connstring
+            - --deployments=mock-app
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe: # loop alive — NEVER /health/couchbase
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe: # wired to act (K8s API reachable) — NEVER /health/couchbase
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
