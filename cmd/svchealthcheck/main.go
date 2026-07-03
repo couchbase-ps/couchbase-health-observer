@@ -91,7 +91,7 @@ func main() {
 		}
 		if *mode == "active" {
 			if _, err := k8sClient.Discovery().ServerVersion(); err != nil {
-				return fmt.Errorf("k8s API unreachable: %w", err)
+				return fmt.Errorf("k8s API unreachable: %v", err)
 			}
 		}
 		return nil
@@ -153,6 +153,7 @@ func mustK8sClient() kubernetes.Interface {
 	if err != nil {
 		log.Fatalf("k8s config (active mode needs in-cluster or KUBECONFIG): %v", err)
 	}
+	cfg.Timeout = 5 * time.Second // bound readiness ServerVersion() + actuator calls
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		log.Fatalf("k8s client: %v", err)
