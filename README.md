@@ -87,6 +87,19 @@ only). Tagging a `vX.Y.Z` release also generates the changelog and a GitHub rele
 > The package is private until you set it public (repo → Packages → package settings →
 > change visibility), which is needed for pulls from outside the org (e.g. the EKS demo).
 
+## Observer health & observability
+
+The observer serves three **separate** signals — never conflate them:
+
+- `/health/couchbase` — database reachability (AWS ALB quorum path).
+- `/healthz` — liveness: is the active loop alive? (kubelet livenessProbe)
+- `/readyz` — readiness: is the observer wired to act (K8s API reachable)? (kubelet readinessProbe)
+- `/metrics` — Prometheus self-observability.
+
+Never point liveness/readiness at `/health/couchbase`. Details:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and
+[docs/RUNBOOK-failover-failback.md](docs/RUNBOOK-failover-failback.md).
+
 ## Prebuilt binaries (run without Docker)
 
 Each `vX.Y.Z` release attaches static, cross-OS `svchealthcheck` binaries (built by
