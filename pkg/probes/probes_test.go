@@ -1,6 +1,7 @@
 package probes
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -51,3 +52,27 @@ func TestLivenessObserveModeStatic200(t *testing.T) {
 		t.Fatalf("code=%d, want 200 (observe mode, nil heartbeat)", w.Code)
 	}
 }
+
+func TestReadinessOKWhenCheckPasses(t *testing.T) {
+	h := Readiness(func(context.Context) error { return nil })
+	w := httptest.NewRecorder()
+	h(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d, want 200", w.Code)
+	}
+}
+
+func TestReadiness503WhenCheckFails(t *testing.T) {
+	h := Readiness(func(context.Context) error { return errNotReady })
+	w := httptest.NewRecorder()
+	h(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d, want 503", w.Code)
+	}
+}
+
+type stubErr string
+
+func (e stubErr) Error() string { return string(e) }
+
+var errNotReady = stubErr("k8s API unreachable")

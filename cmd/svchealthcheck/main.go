@@ -9,10 +9,12 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/gocb/v2"
@@ -65,6 +67,13 @@ func main() {
 	if *mode == "active" {
 		hb = &probes.Heartbeat{}
 	}
+	var firstEval atomic.Bool // set true after the first health evaluation completes
+
+	// K8s client is needed by the readiness check (active mode) and the actuator.
+	var k8sClient kubernetes.Interface
+	if *mode == "active" {
+		k8sClient = mustK8sClient()
+	}
 
 	// /health/couchbase always served (probes fresh per request).
 	mux := http.NewServeMux()
@@ -73,17 +82,35 @@ func main() {
 	// this at /health/couchbase: a real DB outage would then restart the observer
 	// exactly when it must act.
 	mux.HandleFunc("/healthz", probes.Liveness(hb, 3*(*interval), time.Now))
+	// Readiness: config parsed (implicit post-flag.Parse) + first evaluation done +
+	// (active mode) the K8s API is reachable. Re-checked every probe, so a later
+	// API loss flips the pod NOT READY without ever restarting it.
+	mux.HandleFunc("/readyz", probes.Readiness(func(ctx context.Context) error {
+		if !firstEval.Load() {
+			return fmt.Errorf("no health evaluation completed yet")
+		}
+		if *mode == "active" {
+			if _, err := k8sClient.Discovery().ServerVersion(); err != nil {
+				return fmt.Errorf("k8s API unreachable: %w", err)
+			}
+		}
+		return nil
+	}))
 	go func() {
 		log.Printf("listening on %s (mode=%s critical=%s)", *addr, *mode, *critical)
 		log.Fatal(http.ListenAndServe(*addr, mux))
 	}()
 
 	if *mode != "active" {
-		select {} // observe-only: just serve
+		firstEval.Store(true) // observe-only: ready as soon as the server is up
+		select {}             // just serve
 	}
 
-	// Active mode: build the actuator and run the decision loop.
-	act := buildActuator(*namespace, *configMap, *configKey, *secondary, strings.Split(*deployments, ","), *dryRun)
+	// Active mode: build the actuator (reusing the client made for readiness) and run the loop.
+	act := &actuator.K8sActuator{Client: k8sClient, Cfg: actuator.Config{
+		Namespace: *namespace, ConfigMap: *configMap, ConfigKey: *configKey,
+		Deployments: strings.Split(*deployments, ","), Secondary: *secondary, DryRun: *dryRun,
+	}}
 	machine := state.New(state.Config{FailoverDelay: *failoverDelay})
 	log.Printf("active mode: failover-delay=%s secondary=%q deployments=%q dryRun=%v", *failoverDelay, *secondary, *deployments, *dryRun)
 
@@ -93,6 +120,7 @@ func main() {
 		hb.Tick()
 		probes, _ := prober.Probe(context.Background())
 		rep := svchealth.Compute(probes, crit, time.Now().UTC().Format(time.RFC3339))
+		firstEval.Store(true)
 		res := machine.Observe(rep.Status)
 		log.Printf("status=%s reason=%q switchRequired=%v", rep.Status, rep.Reason, res.SwitchRequired)
 		if res.SwitchRequired {
@@ -111,15 +139,6 @@ func main() {
 			}
 		}
 	}
-}
-
-func buildActuator(ns, cm, key, secondary string, deployments []string, dryRun bool) actuator.Actuator {
-	cfg := actuator.Config{
-		Namespace: ns, ConfigMap: cm, ConfigKey: key,
-		Deployments: deployments, Secondary: secondary, DryRun: dryRun,
-	}
-	cs := mustK8sClient()
-	return &actuator.K8sActuator{Client: cs, Cfg: cfg}
 }
 
 // mustK8sClient uses KUBECONFIG if set (local / kind), else in-cluster config.
