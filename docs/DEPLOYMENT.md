@@ -45,6 +45,10 @@ cluster auto-failover timeout so absorbed single-node losses do not trigger a sw
 `observer_failover_total`, `observer_failover_errors_total`, `observer_secondary_up`.
 Alerts in `deploy/k8s/observer-alerts.yaml`.
 
+Note: `observer_secondary_up` is set only when a switch is pending (sustained outage),
+so it reads `0` until the first switch attempt — read it alongside `observer_couchbase_up`
+(the `ObserverSwitchHeldSecondaryDown` alert already gates on both).
+
 ## SPOF & HA
 
 The centralized model runs **one** active detector — a single point of failure.
