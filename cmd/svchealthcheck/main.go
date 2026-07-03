@@ -17,6 +17,7 @@ import (
 
 	"github.com/couchbase/gocb/v2"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/actuator"
+	"github.com/couchbaselabs/couchbase-health-observer/pkg/probes"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/state"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/svchealth"
 	"k8s.io/client-go/kubernetes"
@@ -58,10 +59,20 @@ func main() {
 	prober := &svchealth.GocbProber{Cluster: cluster, Bucket: b}
 	crit := strings.Split(*critical, ",")
 
+	// Heartbeat is only meaningful in active mode (there is a loop to stall). In
+	// observe mode it stays nil -> liveness is a static 200.
+	var hb *probes.Heartbeat
+	if *mode == "active" {
+		hb = &probes.Heartbeat{}
+	}
+
 	// /health/couchbase always served (probes fresh per request).
 	mux := http.NewServeMux()
 	mux.Handle("/health/couchbase", &svchealth.Handler{Prober: prober, Critical: crit})
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	// Liveness fails ONLY when the active loop stalls (>3x interval). NEVER point
+	// this at /health/couchbase: a real DB outage would then restart the observer
+	// exactly when it must act.
+	mux.HandleFunc("/healthz", probes.Liveness(hb, 3*(*interval), time.Now))
 	go func() {
 		log.Printf("listening on %s (mode=%s critical=%s)", *addr, *mode, *critical)
 		log.Fatal(http.ListenAndServe(*addr, mux))
@@ -79,6 +90,7 @@ func main() {
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 	for range ticker.C {
+		hb.Tick()
 		probes, _ := prober.Probe(context.Background())
 		rep := svchealth.Compute(probes, crit, time.Now().UTC().Format(time.RFC3339))
 		res := machine.Observe(rep.Status)
