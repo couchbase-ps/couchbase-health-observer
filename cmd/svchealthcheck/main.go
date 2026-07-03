@@ -120,6 +120,19 @@ func main() {
 	secondaryRegion := regionLabel(*secondary)
 	metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(1)
 
+	var secondaryProber *svchealth.GocbProber
+	if *secondary != "" {
+		if sc, err := gocb.Connect(*secondary, gocb.ClusterOptions{
+			Authenticator: gocb.PasswordAuthenticator{Username: *user, Password: *pass},
+		}); err == nil {
+			sb := sc.Bucket(*bucket)
+			_ = sb.WaitUntilReady(5*time.Second, nil)
+			secondaryProber = &svchealth.GocbProber{Cluster: sc, Bucket: sb}
+		} else {
+			log.Printf("secondary connect failed (guard will treat secondary as DOWN): %v", err)
+		}
+	}
+
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -147,6 +160,20 @@ func main() {
 		if res.SwitchRequired {
 			if *secondary == "" {
 				log.Printf("switch required but --secondary-conn empty; skipping")
+				continue
+			}
+			secStatus := "DOWN"
+			if secondaryProber != nil {
+				sp, _ := secondaryProber.Probe(context.Background())
+				secStatus = svchealth.Compute(sp, crit, time.Now().UTC().Format(time.RFC3339)).Status
+			}
+			secUp := 0.0
+			if secondaryReady(secStatus) {
+				secUp = 1.0
+			}
+			metrics.SecondaryUp.Set(secUp)
+			if !secondaryReady(secStatus) {
+				log.Printf("switch held: secondary not ready (status=%s); will retry next tick", secStatus)
 				continue
 			}
 			switched, err := act.Switch(context.Background())
@@ -186,6 +213,10 @@ func mustK8sClient() kubernetes.Interface {
 	}
 	return cs
 }
+
+// secondaryReady reports whether a computed secondary status permits a switch.
+// Only a hard DOWN holds the switch; UP and DEGRADED (critical services up) proceed.
+func secondaryReady(status string) bool { return status != "DOWN" }
 
 // regionLabel extracts a short region name from a couchbase:// connstring, e.g.
 // "couchbase://region-a-srv.region-a.svc" -> "region-a". Empty conn -> "none".
