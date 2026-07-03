@@ -128,6 +128,7 @@ func main() {
 		rep := svchealth.Compute(probes, crit, time.Now().UTC().Format(time.RFC3339))
 		firstEval.Store(true)
 		metrics.LoopLastTick.Set(float64(time.Now().Unix()))
+		// DEGRADED counts as up: the critical path is healthy (mirrors /health/couchbase 200).
 		up := 0.0
 		if rep.Status != "DOWN" {
 			up = 1.0
@@ -140,8 +141,8 @@ func main() {
 			}
 			metrics.ServiceUp.WithLabelValues(svc).Set(s)
 		}
-		metrics.SustainedDownSeconds.Set(machine.DownSeconds(time.Now()))
 		res := machine.Observe(rep.Status)
+		metrics.SustainedDownSeconds.Set(machine.DownSeconds(time.Now()))
 		log.Printf("status=%s reason=%q switchRequired=%v", rep.Status, rep.Reason, res.SwitchRequired)
 		if res.SwitchRequired {
 			if *secondary == "" {
@@ -192,7 +193,10 @@ func regionLabel(conn string) string {
 	if conn == "" {
 		return "none"
 	}
-	h := strings.TrimPrefix(conn, "couchbase://")
+	h := conn
+	if i := strings.Index(h, "://"); i >= 0 {
+		h = h[i+3:]
+	}
 	if i := strings.Index(h, "."); i >= 0 {
 		h = h[:i]
 	}
