@@ -1,6 +1,10 @@
 # Alerting rules for the centralized Observer. Requires the Prometheus Operator
 # (PrometheusRule CRD). The dead-man switch is the concrete SPOF mitigation for
 # the single-replica centralized model: if the observer disappears, you get paged.
+#
+# NOTE: ObserverAbsent uses up{job="observer"} — it assumes your Prometheus scrape
+# names the job "observer" (annotation-based discovery via the Service/pod usually
+# does). If your scrape config labels the job differently, adjust the job= selector.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
