@@ -60,6 +60,12 @@ go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve
 test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
 ```
 
+CI: `ci.yml` fast gate (fmt/vet/build/unit + terraform) runs on PRs + is
+`workflow_call`ed by publish/release. `e2e.yml` runs GitHub-safe e2e in parallel
+on PRs (all green, blocking, on ubuntu-latest): compose e2e, compose TLS e2e,
+kind switch-lambda, kind region-switch. AWS e2e (`test/aws/*`) NOT in CI (needs
+real AWS / LocalStack).
+
 ## Source design docs (Obsidian vault)
 
 - Plan being executed: `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md`
