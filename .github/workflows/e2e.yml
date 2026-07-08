@@ -1,0 +1,78 @@
+name: e2e
+
+# GitHub-safe end-to-end suite. Runs in parallel with ci.yml (unit + terraform)
+# on every PR, so a PR is a full regression gate without serial wait. AWS e2e
+# (test/aws/*) is intentionally excluded -- it needs real AWS / LocalStack tiers.
+on:
+  pull_request:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: compose detector e2e
+        run: test/compose/e2e.sh
+      - name: dump state on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker logs cb-observer 2>&1 | tail -100 || true
+
+  compose-tls-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: compose TLS e2e
+        run: test/compose/tls_e2e.sh
+      - name: dump state on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker logs cb-observer-tls 2>&1 | tail -100 || true
+
+  kind-switch-lambda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+      # install_only: the script creates its own named kind cluster, so we only
+      # want the kind + kubectl binaries, not kind-action's default cluster.
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - name: switch-lambda kind e2e
+        run: test/kind/switch_lambda_e2e.sh
+      - name: dump cluster state on failure
+        if: failure()
+        run: kubectl get pods -A -o wide || true
+
+  # Heaviest job: 6 Couchbase server pods on kind. Proven to fit a standard
+  # ubuntu-latest runner (~9m on PR #23). 45m timeout bounds a hang and leaves
+  # headroom; watch for occasional resource-driven flakes.
+  kind-region-switch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - uses: azure/setup-helm@v4
+      - name: region-switch kind e2e
+        run: test/kind/e2e_switch.sh
+      - name: dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get couchbaseclusters -A || true

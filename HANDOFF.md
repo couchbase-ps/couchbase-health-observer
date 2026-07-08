@@ -16,6 +16,29 @@ yet pushed). Convention documented in AGENTS.md.
 - **Branch:** `aws-quorum-infra` (path-2 AWS aggregation; centralized observer path is on `main`).
 - **Phase:** Observer implementation plan complete through Task 12. Path-2 distributed-quorum AWS aggregation infra (plan 2) built.
 
+## Parallel CI: unit + e2e on PRs (2026-07-08)
+
+Added `.github/workflows/e2e.yml`: four e2e jobs run parallel with `ci.yml`
+(unit + terraform) on every PR. Jobs: `compose-e2e`, `compose-tls-e2e`,
+`kind-switch-lambda`, `kind-region-switch`. `ci.yml` unchanged (still the lean
+`workflow_call` gate for publish/release). AWS e2e excluded. Concurrency guard
+cancels superseded PR e2e runs.
+
+**PR #23 validated on GitHub runners (run 2, all-green gate):** `test` (unit),
+`compose-e2e` (~3m48s), `kind-switch-lambda` (~1m6s), `kind-region-switch`
+(~8m46s) all PASS. e2e workflow conclusion = success; PR MERGEABLE.
+- `kind-region-switch` (6 Couchbase pods) **fits a standard `ubuntu-latest`
+  runner** — resource question answered, job kept. Run 1 failure was only the
+  missing `couchbase-partners` helm repo; fixed in `test/kind/e2e_switch.sh` +
+  `render.sh` (`helm repo add` before `helm dependency build`).
+- `compose-tls-e2e` case 1 (`--tls-cert-path` → DOWN) failed on GH runners:
+  `poll_status` returned the FIRST probe (a warm-up DOWN before the observer
+  settled over TLS), not the expected status. FIXED on main (89a2dd9,
+  `🐛(compose) #19: wait for expected TLS e2e status, not first probe`) — the
+  harness now waits for the expected status. Branch rebased onto that fix and
+  `continue-on-error` removed, so `compose-tls-e2e` is a blocking gate again. All
+  four e2e jobs now green + blocking.
+
 ## Distributed-quorum path 2: AWS aggregation infra (2026-06-24)
 
 CBSE-22993 path-2 actuation. Reuse the observer health endpoint (observe-mode fleet) instead of a per-app Spring starter, so plan 1 (Spring starter) is skipped. This pass = plan 2 only (infra up to SNS); the switch Lambda (plan 3) is deferred to `cmd/switch-lambda`, reusing `pkg/actuator`.

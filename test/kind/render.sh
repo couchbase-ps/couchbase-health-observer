@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CHART="$ROOT/deploy/kind/couchbase-cluster"
 
+# Register the couchbase-operator repo the chart depends on (absent on fresh checkouts).
+helm repo add couchbase-partners https://couchbase-partners.github.io/helm-charts/ >/dev/null 2>&1 || true
+helm repo update couchbase-partners >/dev/null 2>&1 || true
 helm dependency build "$CHART" >/dev/null
 
 REGION_A="$(

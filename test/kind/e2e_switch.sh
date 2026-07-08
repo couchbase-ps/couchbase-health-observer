@@ -112,6 +112,10 @@ docker build -t "$OBSERVER_IMAGE" "$ROOT"
 kind load docker-image "$OBSERVER_IMAGE" --name "$KIND_CLUSTER"
 
 echo "== build the pinned official Couchbase chart dependency =="
+# The chart depends on the couchbase-operator repo; `helm dependency build`
+# needs it registered locally (present on a dev box, absent on a clean CI runner).
+helm repo add couchbase-partners https://couchbase-partners.github.io/helm-charts/ >/dev/null 2>&1 || true
+helm repo update couchbase-partners >/dev/null 2>&1 || true
 helm dependency build "$CB_CHART"
 
 echo "== install each region as one official CAO + CouchbaseCluster Helm release =="
