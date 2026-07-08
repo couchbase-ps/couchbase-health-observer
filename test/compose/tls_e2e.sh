@@ -20,7 +20,10 @@ trap teardown EXIT
 
 echo "== up =="
 teardown
-$COMPOSE up -d --build
+$COMPOSE up -d
+# Build the observer image under the tag the one-off TLS containers run below.
+# (compose builds its own "compose-observer"; the docker run calls need this tag.)
+docker build -t "$IMAGE" "$REPO"
 
 # Wait until the cluster REST is serving (init done). travel-sample load takes ~90s.
 echo "== waiting for cluster init =="
