@@ -7,8 +7,9 @@ package state
 import "time"
 
 type Config struct {
-	FailoverDelay time.Duration
-	Now           func() time.Time // injectable clock; defaults to time.Now
+	FailoverDelay   time.Duration
+	AlreadySwitched bool             // seed: ConfigMap already points to secondary at startup
+	Now             func() time.Time // injectable clock; defaults to time.Now
 }
 
 type Machine struct {
@@ -16,7 +17,6 @@ type Machine struct {
 	firstDownAt time.Time
 	inDown      bool
 	switched    bool
-	armed       bool // true once the cluster has been seen healthy; gate against cold-start switch
 }
 
 type Result struct {
@@ -29,7 +29,7 @@ func New(cfg Config) *Machine {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Machine{cfg: cfg}
+	return &Machine{cfg: cfg, switched: cfg.AlreadySwitched}
 }
 
 // Observe records the latest global status ("UP"/"DOWN"; anything other than
@@ -39,16 +39,9 @@ func (m *Machine) Observe(status string) Result {
 	res := Result{Status: status}
 
 	if status != "DOWN" {
-		// healthy (UP/DEGRADED): arm the machine and reset the DOWN timer. Do not
-		// auto-failback even if previously switched.
-		m.armed = true
+		// healthy (UP/DEGRADED): reset the DOWN timer. Do not auto-failback even
+		// if previously switched.
 		m.inDown = false
-		return res
-	}
-
-	if !m.armed {
-		// Cold start into an already-down primary: never switch until the cluster
-		// has been observed healthy at least once.
 		return res
 	}
 
