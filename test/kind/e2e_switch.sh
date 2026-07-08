@@ -221,3 +221,81 @@ APP_LOGS="$(kubectl logs -l app=mock-app --tail=20)"
 grep -q 'connstring=couchbase://region-b-srv.region-b.svc' <<<"$APP_LOGS"
 
 echo "PASS: active observer switched cb-conn and rolled mock-app"
+
+# Scenario C: the observer restarts (cold start) into a region-a that is ALREADY
+# DOWN while cb-conn still points at primary -- as if the previous instance died
+# before it could react to the outage. region-a is already gone from scenario B
+# (operator paused, pods force-deleted, never rescheduled), so there is no need to
+# re-kill it; just rewind cb-conn back to primary to recreate the "not yet
+# switched" starting state, then restart the observer and confirm it still
+# switches (armed->AlreadySwitched cold-start reconciliation must not block a
+# genuine pending switch).
+echo "== scenario C: cold-start restart into already-DOWN primary, configmap==primary, expect switch =="
+kubectl patch configmap cb-conn --type=merge -p '{"data":{"connstring":"couchbase://region-a-srv.region-a.svc"}}'
+
+echo "stopping observer (simulate a crash before it could react to the outage)"
+kubectl scale deployment/observer --replicas=0
+kubectl wait --for=delete pod -l app=observer --timeout=60s
+
+BEFORE_HASH="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+
+echo "cold-starting observer into the still-DOWN region-a"
+kubectl scale deployment/observer --replicas=1
+kubectl rollout status deployment/observer --timeout=2m
+
+echo "== wait for ConfigMap switch =="
+NEW=""
+for _ in $(seq 1 60); do
+  NEW="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
+  [[ "$NEW" == "couchbase://region-b-srv.region-b.svc" ]] && break
+  sleep 2
+done
+[[ "$NEW" == "couchbase://region-b-srv.region-b.svc" ]] || {
+  echo "FAIL: cb-conn did not switch after cold-start restart (cb-conn=$NEW)"
+  kubectl logs deployment/observer --tail=100 || true
+  exit 1
+}
+
+echo "== verify controlled redeploy picked up region-b =="
+kubectl rollout status deployment/mock-app --timeout=2m
+AFTER_HASH="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+[[ "$AFTER_HASH" != "$BEFORE_HASH" ]] || { echo "FAIL: mock-app not rolled after cold-start switch"; exit 1; }
+echo "PASS: cold-start restart switched + rolled apps"
+
+# Scenario D: the observer restarts (cold start) again, this time with cb-conn
+# already on region-b (left by scenario C) and region-a still DOWN. It must adopt
+# the already-switched state -- no re-switch, no app roll -- since the switch
+# already happened; only the ConfigMap's current value at boot tells it that.
+echo "== scenario D: cold-start with configmap already==secondary, expect adopt (no roll) =="
+CONN_BEFORE="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
+[[ "$CONN_BEFORE" == "couchbase://region-b-srv.region-b.svc" ]] || {
+  echo "SETUP FAIL: expected cb-conn on secondary before scenario D, got $CONN_BEFORE"
+  exit 1
+}
+ROLL_BEFORE="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+
+echo "stopping observer (simulate a crash after the switch already happened)"
+kubectl scale deployment/observer --replicas=0
+kubectl wait --for=delete pod -l app=observer --timeout=60s
+
+echo "cold-starting observer; region-a still DOWN, cb-conn already on secondary"
+kubectl scale deployment/observer --replicas=1
+kubectl rollout status deployment/observer --timeout=2m
+
+echo "asserting cb-conn stays region-b for ~45s (> FailoverDelay)..."
+for _ in $(seq 1 22); do
+  CONN_AFTER="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
+  [[ "$CONN_AFTER" == "couchbase://region-b-srv.region-b.svc" ]] || {
+    echo "FAIL: cb-conn changed on adopt (cb-conn=$CONN_AFTER)"
+    kubectl logs deployment/observer --tail=100 || true
+    exit 1
+  }
+  sleep 2
+done
+ROLL_AFTER="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+[[ "$ROLL_AFTER" == "$ROLL_BEFORE" ]] || { echo "FAIL: mock-app rolled again on adopt (want no roll)"; exit 1; }
+kubectl logs deployment/observer | grep -q "adopting switched state" || {
+  echo "FAIL: observer did not log the adopt path"
+  exit 1
+}
+echo "PASS: cold-start adopt, no re-switch, no app roll"
