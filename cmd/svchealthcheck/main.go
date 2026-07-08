@@ -208,6 +208,8 @@ func main() {
 				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
 				log.Printf("SWITCHED to %s", *secondary)
 			default:
+				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
+				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
 				log.Printf("already on secondary, no-op")
 			}
 		}
