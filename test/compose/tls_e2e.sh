@@ -58,17 +58,20 @@ run_observer() {
     --user=Administrator --pass=password --critical=kv --addr=":$port" "$@" >/dev/null
 }
 
-# poll_status <hostport> -> prints the first non-empty global status seen within
-# the window (NONE if the server never answered). The cluster-init wait above plus
-# the observer's own WaitUntilReady mean the first answer is already settled.
-poll_status() {
-  local port="$1" last=""
-  for i in $(seq 1 24); do
+# wait_status <hostport> <want> -> polls until the observer reports <want>,
+# printing it; on timeout prints the last status seen (NONE if never answered).
+# A freshly-started observer can briefly report DOWN while the cluster/bucket
+# settles, so positive cases (want=UP) must wait through that transient rather
+# than accept the first non-empty status. The negative case (want=DOWN) returns
+# as soon as DOWN is observed. Window covers CI cluster+bucket settle (~180s).
+wait_status() {
+  local port="$1" want="$2" last="NONE"
+  for i in $(seq 1 36); do
     last="$(curl -s "http://localhost:$port/health/couchbase" | jq -r '.status // empty' 2>/dev/null)"
-    [ -n "$last" ] && echo "$last" && return 0
+    [ "$last" = "$want" ] && { echo "$want"; return 0; }
     sleep 5
   done
-  echo "${last:-NONE}"
+  echo "$last"
 }
 
 assert() { # <label> <got> <want>
@@ -82,17 +85,17 @@ assert() { # <label> <got> <want>
 
 echo "== case 1: --tls-cert-path -> UP =="
 run_observer cb-observer-tls 8082 --tls-cert-path=/ca.pem
-assert "cert-path" "$(poll_status 8082)" "UP"
+assert "cert-path" "$(wait_status 8082 UP)" "UP"
 docker rm -f cb-observer-tls >/dev/null 2>&1 || true
 
 echo "== case 2: --tls-skip-verify -> UP =="
 run_observer cb-observer-tls 8083 --tls-skip-verify
-assert "skip-verify" "$(poll_status 8083)" "UP"
+assert "skip-verify" "$(wait_status 8083 UP)" "UP"
 docker rm -f cb-observer-tls >/dev/null 2>&1 || true
 
 echo "== case 3 (negative): no TLS flags -> DOWN =="
 run_observer cb-observer-tls 8084
-assert "no-flags-verify-fails" "$(poll_status 8084)" "DOWN"
+assert "no-flags-verify-fails" "$(wait_status 8084 DOWN)" "DOWN"
 docker rm -f cb-observer-tls >/dev/null 2>&1 || true
 
 if [ "$FAIL" -eq 0 ]; then echo "== ALL TLS E2E PASSED =="; else echo "== TLS E2E FAILED =="; fi
