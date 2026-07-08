@@ -130,6 +130,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 | `--bucket` | `travel-sample` | bucket used for the KV ping |
 | `--user` / `--pass` | `Administrator` / `password` | cluster admin credentials |
 | `--critical` | `kv` | comma-separated services that drive the global verdict |
+| `--tls-cert-path` | (empty) | PEM CA cert to trust for `couchbases://` TLS |
+| `--tls-skip-verify` | `false` | skip TLS server-cert verification (insecure); wins over `--tls-cert-path` if both set |
 | `--addr` | `:8080` | HTTP listen address |
 | `--interval` | `5s` | active-mode poll interval |
 | `--failover-delay` | `150s` | sustained DOWN before switching; set above the cluster auto-failover timeout |
@@ -178,6 +180,23 @@ $COMPOSE down -v
 > If step 2 always returns DOWN: check `lsof -nP -iTCP:8080 -sTCP:LISTEN` for a stray
 > host process (e.g. a leftover `go run ./cmd/svchealthcheck` bound to `localhost`)
 > squatting on port 8080 and intercepting the curls.
+
+### TLS (couchbases://)
+
+For a cluster with a private-CA / self-signed cert, either trust its CA or skip
+verification:
+
+```bash
+# trust the cluster CA (fetch it from any node's REST API)
+curl -fsu Administrator:password http://<node>:8091/pools/default/certificate > ca.pem
+go run ./cmd/svchealthcheck --conn couchbases://<node> --critical kv --tls-cert-path ca.pem
+
+# or skip verification (dev / trusted network only)
+go run ./cmd/svchealthcheck --conn couchbases://<node> --critical kv --tls-skip-verify
+```
+
+Automated e2e for both (plus a negative control proving verification is
+enforced): `test/compose/tls_e2e.sh`.
 
 ## Manual testing — Kubernetes (kind, active mode)
 

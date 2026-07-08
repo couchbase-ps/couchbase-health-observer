@@ -57,6 +57,7 @@ go test ./...                                  # unit tests (no cluster needed)
 docker compose -f deploy/compose/docker-compose.yml up -d   # ~90s to init + load travel-sample
 go test -tags=integration ./...
 go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve /health/couchbase
+test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
 ```
 
 ## Source design docs (Obsidian vault)
