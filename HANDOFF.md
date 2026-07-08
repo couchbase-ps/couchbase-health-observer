@@ -23,8 +23,18 @@ ConfigMap-equality idempotency, `pkg/actuator/k8s.go:30-32`, final guard either 
 `test/kind/e2e_switch.sh` gained scenarios C/D after A/B: **C** restart into already-DOWN
 region-a, `cb-conn` rewound to primary -> switch + mock-app roll; **D** immediate restart,
 `cb-conn` already region-b, region-a still DOWN -> adopt, no re-switch, no roll,
-`"adopting switched state"` in logs. Not run live yet (slow multi-node kind bring-up) —
-`bash -n` clean only.
+`"adopting switched state"` in logs. C/D wait pod **Running** not Ready (cold-start-into-DOWN
+observer not Ready until first eval; readiness never gates switch loop). Live e2e
+**A+B+C+D PASS** on kind.
+
+**Cold-start prober crash fix (found via C).** Observer cold-starting into never-bootstrapped
+primary blocked forever in `gocb` `Bucket.Ping`/`Cluster.Ping` (no timeout) -> active loop
+stalled -> liveness heartbeat starved -> `/healthz` 503 -> kubelet CrashLoopBackOff -> never
+switched. Fix: `svchealth.GocbProber.Timeout` (per-ping bound) from new `--probe-timeout`
+flag (default 2s); timed-out ping = DOWN, loop always advances + ticks heartbeat. Warn if
+`2*probe-timeout >= 3*interval` (liveness window). Healthy/node-kill paths ping fast,
+unaffected. Regression test `pkg/svchealth/prober_gocb_test.go` (RFC5737 non-routable addr,
+no cluster).
 
 ## State
 
