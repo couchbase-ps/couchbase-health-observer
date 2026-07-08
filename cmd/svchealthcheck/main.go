@@ -38,6 +38,7 @@ func main() {
 	critical := flag.String("critical", "kv", "comma-separated critical services")
 	addr := flag.String("addr", ":8080", "listen address")
 	interval := flag.Duration("interval", 5*time.Second, "active poll interval")
+	probeTimeout := flag.Duration("probe-timeout", 2*time.Second, "per-ping bound so a probe against an unreachable cluster returns (DOWN) instead of wedging the loop; keep 2*probe-timeout < 3*interval so the liveness heartbeat stays fresh")
 	failoverDelay := flag.Duration("failover-delay", 150*time.Second, "sustained DOWN before switch; set above the cluster auto-failover timeout")
 	secondary := flag.String("secondary-conn", "", "connection string to switch to (active mode)")
 	namespace := flag.String("namespace", "default", "k8s namespace (active mode)")
@@ -48,6 +49,14 @@ func main() {
 	tlsCertPath := flag.String("tls-cert-path", "", "path to a PEM CA cert to trust for couchbases:// TLS")
 	tlsSkipVerify := flag.Bool("tls-skip-verify", false, "skip TLS server-certificate verification (insecure)")
 	flag.Parse()
+
+	// Liveness (/healthz) trips when the loop goes 3*interval without a tick. Each
+	// iteration runs two sequential pings, each bounded by probe-timeout, so keep
+	// 2*probe-timeout < 3*interval or a probe against a down cluster can starve the
+	// heartbeat and get the pod restarted instead of switched.
+	if 2*(*probeTimeout) >= 3*(*interval) {
+		log.Printf("WARNING: 2*probe-timeout (%s) >= liveness window 3*interval (%s); lower --probe-timeout or raise --interval", 2*(*probeTimeout), 3*(*interval))
+	}
 
 	if os.Getenv("GOCB_VERBOSE") != "" {
 		gocb.SetLogger(gocb.VerboseStdioLogger())
@@ -68,7 +77,7 @@ func main() {
 	b := cluster.Bucket(*bucket)
 	_ = b.WaitUntilReady(5*time.Second, nil)
 
-	prober := &svchealth.GocbProber{Cluster: cluster, Bucket: b}
+	prober := &svchealth.GocbProber{Cluster: cluster, Bucket: b, Timeout: *probeTimeout}
 	crit := strings.Split(*critical, ",")
 
 	// Heartbeat is only meaningful in active mode (there is a loop to stall). In
@@ -147,7 +156,7 @@ func main() {
 		}); err == nil {
 			sb := sc.Bucket(*bucket)
 			_ = sb.WaitUntilReady(5*time.Second, nil)
-			secondaryProber = &svchealth.GocbProber{Cluster: sc, Bucket: sb}
+			secondaryProber = &svchealth.GocbProber{Cluster: sc, Bucket: sb, Timeout: *probeTimeout}
 		} else {
 			log.Printf("secondary connect failed (guard will treat secondary as DOWN): %v", err)
 		}
