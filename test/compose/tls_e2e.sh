@@ -9,12 +9,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 COMPOSE="docker compose -f $REPO/deploy/compose/docker-compose.yml"
 IMAGE="cb-health-observer:tls-e2e"
-CERT="$(mktemp -d)/ca.pem"
+CERTDIR="$(mktemp -d)"
+CERT="$CERTDIR/ca.pem"
 FAIL=0
 
 teardown() {
   docker rm -f cb-observer-tls >/dev/null 2>&1 || true
   $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$CERTDIR" 2>/dev/null || true
 }
 trap teardown EXIT
 
@@ -50,7 +52,9 @@ run_observer() {
     --user=Administrator --pass=password --critical=kv --addr=":$port" "$@" >/dev/null
 }
 
-# poll_status <hostport> -> prints final global status seen within the window
+# poll_status <hostport> -> prints the first non-empty global status seen within
+# the window (NONE if the server never answered). The cluster-init wait above plus
+# the observer's own WaitUntilReady mean the first answer is already settled.
 poll_status() {
   local port="$1" last=""
   for i in $(seq 1 24); do
@@ -62,7 +66,12 @@ poll_status() {
 }
 
 assert() { # <label> <got> <want>
-  if [ "$2" = "$3" ]; then echo "PASS: $1 ($2)"; else echo "FAIL: $1 (got=$2 want=$3)"; FAIL=1; fi
+  if [ "$2" = "$3" ]; then
+    echo "PASS: $1 ($2)"
+  else
+    echo "FAIL: $1 (got=$2 want=$3)"; FAIL=1
+    echo "---- cb-observer-tls logs ----"; docker logs cb-observer-tls 2>&1 | tail -30 || true
+  fi
 }
 
 echo "== case 1: --tls-cert-path -> UP =="
