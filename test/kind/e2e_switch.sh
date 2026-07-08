@@ -241,18 +241,23 @@ BEFORE_HASH="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.meta
 
 echo "cold-starting observer into the still-DOWN region-a"
 kubectl scale deployment/observer --replicas=1
-kubectl rollout status deployment/observer --timeout=2m
+# Cold-start into a DOWN primary: the observer is intentionally NOT Ready until its
+# first health evaluation completes (/readyz gates on firstEval), and readiness does
+# NOT gate the switch loop. Wait for the pod to be Running, then assert on the switch.
+kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
 
 echo "== wait for ConfigMap switch =="
 NEW=""
-for _ in $(seq 1 60); do
+for _ in $(seq 1 120); do
   NEW="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
   [[ "$NEW" == "couchbase://region-b-srv.region-b.svc" ]] && break
   sleep 2
 done
 [[ "$NEW" == "couchbase://region-b-srv.region-b.svc" ]] || {
   echo "FAIL: cb-conn did not switch after cold-start restart (cb-conn=$NEW)"
-  kubectl logs deployment/observer --tail=100 || true
+  kubectl get pods -l app=observer -o wide || true
+  kubectl describe pod -l app=observer || true
+  kubectl logs deployment/observer --tail=200 || true
   exit 1
 }
 
@@ -280,7 +285,9 @@ kubectl wait --for=delete pod -l app=observer --timeout=60s
 
 echo "cold-starting observer; region-a still DOWN, cb-conn already on secondary"
 kubectl scale deployment/observer --replicas=1
-kubectl rollout status deployment/observer --timeout=2m
+# Same as scenario C: cold-start into a DOWN primary is not Ready until the first
+# evaluation; wait for Running, not Ready.
+kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
 
 echo "asserting cb-conn stays region-b for ~45s (> FailoverDelay)..."
 for _ in $(seq 1 22); do
