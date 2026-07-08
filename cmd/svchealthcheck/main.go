@@ -44,14 +44,22 @@ func main() {
 	configKey := flag.String("config-key", "connstring", "key in the configmap (active mode)")
 	deployments := flag.String("deployments", "", "comma-separated deployments to roll (active mode)")
 	dryRun := flag.Bool("dry-run", false, "active mode: log the switch but make no changes")
+	tlsCertPath := flag.String("tls-cert-path", "", "path to a PEM CA cert to trust for couchbases:// TLS")
+	tlsSkipVerify := flag.Bool("tls-skip-verify", false, "skip TLS server-certificate verification (insecure)")
 	flag.Parse()
 
 	if os.Getenv("GOCB_VERBOSE") != "" {
 		gocb.SetLogger(gocb.VerboseStdioLogger())
 	}
 
+	sec, err := buildSecurityConfig(*tlsCertPath, *tlsSkipVerify)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	cluster, err := gocb.Connect(*conn, gocb.ClusterOptions{
-		Authenticator: gocb.PasswordAuthenticator{Username: *user, Password: *pass},
+		Authenticator:  gocb.PasswordAuthenticator{Username: *user, Password: *pass},
+		SecurityConfig: sec,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -123,7 +131,8 @@ func main() {
 	var secondaryProber *svchealth.GocbProber
 	if *secondary != "" {
 		if sc, err := gocb.Connect(*secondary, gocb.ClusterOptions{
-			Authenticator: gocb.PasswordAuthenticator{Username: *user, Password: *pass},
+			Authenticator:  gocb.PasswordAuthenticator{Username: *user, Password: *pass},
+			SecurityConfig: sec,
 		}); err == nil {
 			sb := sc.Bucket(*bucket)
 			_ = sb.WaitUntilReady(5*time.Second, nil)
