@@ -23,6 +23,7 @@ import (
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/probes"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/state"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/svchealth"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -121,12 +122,22 @@ func main() {
 		Namespace: *namespace, ConfigMap: *configMap, ConfigKey: *configKey,
 		Deployments: strings.Split(*deployments, ","), Secondary: *secondary, DryRun: *dryRun,
 	}}
-	machine := state.New(state.Config{FailoverDelay: *failoverDelay})
-	log.Printf("active mode: failover-delay=%s secondary=%q deployments=%q dryRun=%v", *failoverDelay, *secondary, *deployments, *dryRun)
+	alreadySwitched := reconcileAlreadySwitched(context.Background(), k8sClient, *namespace, *configMap, *configKey, *secondary)
+	if alreadySwitched {
+		log.Printf("startup: configmap already on secondary %q; adopting switched state, apps NOT rolled, primary DOWN is expected", *secondary)
+	}
+	machine := state.New(state.Config{FailoverDelay: *failoverDelay, AlreadySwitched: alreadySwitched})
+	log.Printf("active mode: failover-delay=%s secondary=%q deployments=%q dryRun=%v alreadySwitched=%v", *failoverDelay, *secondary, *deployments, *dryRun, alreadySwitched)
 
 	primaryRegion := regionLabel(*conn)
 	secondaryRegion := regionLabel(*secondary)
-	metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(1)
+	// When we booted into an already-switched state, the secondary is the active
+	// region; reflect that instead of the default primary=1.
+	if alreadySwitched {
+		metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
+	} else {
+		metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(1)
+	}
 
 	var secondaryProber *svchealth.GocbProber
 	if *secondary != "" {
@@ -221,6 +232,22 @@ func mustK8sClient() kubernetes.Interface {
 		log.Fatalf("k8s client: %v", err)
 	}
 	return cs
+}
+
+// reconcileAlreadySwitched reads the connstring ConfigMap once at startup and
+// reports whether it already points to the secondary — i.e. a prior observer
+// instance already switched. Read failure or empty secondary -> false (assume
+// not switched, fail toward acting; the delay + secondary guard still protect).
+func reconcileAlreadySwitched(ctx context.Context, client kubernetes.Interface, namespace, configMap, configKey, secondary string) bool {
+	if secondary == "" {
+		return false
+	}
+	cm, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, configMap, metav1.GetOptions{})
+	if err != nil {
+		log.Printf("startup configmap read failed (assuming not switched): %v", err)
+		return false
+	}
+	return cm.Data[configKey] == secondary
 }
 
 // secondaryReady reports whether a computed secondary status permits a switch.
