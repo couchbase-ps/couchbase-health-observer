@@ -2,6 +2,7 @@ package svchealth
 
 import (
 	"context"
+	"time"
 
 	"github.com/couchbase/gocb/v2"
 )
@@ -11,7 +12,8 @@ import (
 // are pinged at the cluster level.
 type GocbProber struct {
 	Cluster *gocb.Cluster
-	Bucket  *gocb.Bucket // for KV ping
+	Bucket  *gocb.Bucket  // for KV ping
+	Timeout time.Duration // per-ping bound; 0 uses the gocb default (may block until bootstrap)
 }
 
 func (g *GocbProber) Probe(_ context.Context) ([]Probe, error) {
@@ -19,16 +21,22 @@ func (g *GocbProber) Probe(_ context.Context) ([]Probe, error) {
 
 	// KV via the bucket.
 	if g.Bucket != nil {
-		if pr, err := g.Bucket.Ping(&gocb.PingOptions{ServiceTypes: []gocb.ServiceType{gocb.ServiceTypeKeyValue}}); err == nil {
+		if pr, err := g.Bucket.Ping(&gocb.PingOptions{
+			ServiceTypes: []gocb.ServiceType{gocb.ServiceTypeKeyValue},
+			Timeout:      g.Timeout,
+		}); err == nil {
 			probes = append(probes, mapReports(pr)...)
 		}
 	}
 	// Cluster-level data-serving services. Management (8091) is intentionally excluded:
 	// it is present on every node and is not a workload service. Services with no
 	// deployed node yield placeholder (empty-host) reports, which Compute drops.
-	if pr, err := g.Cluster.Ping(&gocb.PingOptions{ServiceTypes: []gocb.ServiceType{
-		gocb.ServiceTypeQuery, gocb.ServiceTypeSearch, gocb.ServiceTypeAnalytics,
-	}}); err == nil {
+	if pr, err := g.Cluster.Ping(&gocb.PingOptions{
+		ServiceTypes: []gocb.ServiceType{
+			gocb.ServiceTypeQuery, gocb.ServiceTypeSearch, gocb.ServiceTypeAnalytics,
+		},
+		Timeout: g.Timeout,
+	}); err == nil {
 		probes = append(probes, mapReports(pr)...)
 	}
 	return probes, nil
