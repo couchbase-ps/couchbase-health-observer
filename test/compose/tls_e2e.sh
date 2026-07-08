@@ -9,35 +9,41 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 COMPOSE="docker compose -f $REPO/deploy/compose/docker-compose.yml"
 IMAGE="cb-health-observer:tls-e2e"
-CERTDIR="$(mktemp -d)"
-CERT="$CERTDIR/ca.pem"
+CERTDIR=""
+CERT=""
 FAIL=0
 
 teardown() {
   docker rm -f cb-observer-tls >/dev/null 2>&1 || true
   $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$CERTDIR" 2>/dev/null || true
+  [ -n "$CERTDIR" ] && rm -rf "$CERTDIR" 2>/dev/null || true
 }
 trap teardown EXIT
 
 echo "== up =="
-teardown
+teardown   # clean any prior run BEFORE creating this run's temp dir
 $COMPOSE up -d
+# Temp dir for the fetched CA. Created after the initial teardown so that
+# teardown (which removes $CERTDIR) can never delete it out from under us.
+CERTDIR="$(mktemp -d)"
+CERT="$CERTDIR/ca.pem"
 # Build the observer image under the tag the one-off TLS containers run below.
 # (compose builds its own "compose-observer"; the docker run calls need this tag.)
 docker build -t "$IMAGE" "$REPO"
 
-# Wait until the cluster REST is serving (init done). travel-sample load takes ~90s.
-echo "== waiting for cluster init =="
+# Wait until the cluster is up AND its CA is retrievable. The CA endpoint can lag
+# /pools/default just after provisioning, so retry the fetch itself rather than
+# fetching once (travel-sample load takes ~90s but the CA is ready well before that).
+echo "== waiting for cluster init + CA =="
 for i in $(seq 1 60); do
-  if curl -fsu Administrator:password http://localhost:8091/pools/default >/dev/null 2>&1; then break; fi
+  if curl -fsu Administrator:password http://localhost:8091/pools/default/certificate 2>/dev/null > "$CERT" \
+     && grep -q "BEGIN CERTIFICATE" "$CERT"; then
+    break
+  fi
   sleep 5
 done
-
-echo "== fetching cluster CA =="
-curl -fsu Administrator:password http://localhost:8091/pools/default/certificate > "$CERT"
 if ! grep -q "BEGIN CERTIFICATE" "$CERT"; then
-  echo "FAIL: could not fetch cluster CA"; exit 1
+  echo "FAIL: could not fetch cluster CA within window"; exit 1
 fi
 
 NET="$(docker inspect cb-data-1 -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')"
