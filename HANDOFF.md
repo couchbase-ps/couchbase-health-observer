@@ -13,18 +13,18 @@ yet pushed). Convention documented in AGENTS.md.
 
 ## Cold-start switch via ConfigMap reconciliation (2026-07-08, #20)
 
-Replaced Task-12's `armed` cold-start gate (never switch before first healthy
-observe) with **ConfigMap reconciliation**: `cmd/svchealthcheck` reads `cb-conn`
-once at boot; if it already == `--secondary-conn`, seeds `state.Config.AlreadySwitched=true`
+Replaced Task-12 `armed` cold-start gate (never switch before first healthy observe)
+w/ **ConfigMap reconciliation**: `cmd/svchealthcheck` reads `cb-conn` once at boot; if
+already == `--secondary-conn`, seeds `state.Config.AlreadySwitched=true`
 (`pkg/state.Machine.switched`, was `armed`). Effect: configmap==primary + already-DOWN
-at boot -> now switches after `FailoverDelay` (old gate blocked this forever). configmap==
-secondary at boot -> adopts, logs `"adopting switched state"`, no re-switch/no roll
-(actuator ConfigMap-equality idempotency, `pkg/actuator/k8s.go:30-32`, is the final guard
-either way). `test/kind/e2e_switch.sh` gained scenarios C/D after existing A/B: **C** observer
-restart into already-DOWN region-a with `cb-conn` rewound to primary -> switch + mock-app
-roll; **D** immediate restart with `cb-conn` already on region-b, region-a still DOWN ->
-adopt, no re-switch, no roll, `"adopting switched state"` in logs. Not run live yet (slow
-multi-node kind bring-up) — `bash -n` clean only.
+at boot -> switches after `FailoverDelay` (old gate blocked forever). configmap==secondary
+at boot -> adopts, logs `"adopting switched state"`, no re-switch/no roll (actuator
+ConfigMap-equality idempotency, `pkg/actuator/k8s.go:30-32`, final guard either way).
+`test/kind/e2e_switch.sh` gained scenarios C/D after A/B: **C** restart into already-DOWN
+region-a, `cb-conn` rewound to primary -> switch + mock-app roll; **D** immediate restart,
+`cb-conn` already region-b, region-a still DOWN -> adopt, no re-switch, no roll,
+`"adopting switched state"` in logs. Not run live yet (slow multi-node kind bring-up) —
+`bash -n` clean only.
 
 ## State
 
