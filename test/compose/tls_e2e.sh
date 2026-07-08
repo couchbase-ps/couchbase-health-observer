@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Compose TLS e2e: proves --tls-cert-path and --tls-skip-verify let the observer
+# talk to Couchbase over couchbases://, and that WITHOUT either flag TLS
+# verification fails (negative control). Reuses the shared 5-node compose stack.
+#
+#   tls_e2e.sh          full automated run (up, 3 assertions, teardown)
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+COMPOSE="docker compose -f $REPO/deploy/compose/docker-compose.yml"
+IMAGE="cb-health-observer:tls-e2e"
+CERT="$(mktemp -d)/ca.pem"
+FAIL=0
+
+teardown() {
+  docker rm -f cb-observer-tls >/dev/null 2>&1 || true
+  $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
+}
+trap teardown EXIT
+
+echo "== up =="
+teardown
+$COMPOSE up -d --build
+
+# Wait until the cluster REST is serving (init done). travel-sample load takes ~90s.
+echo "== waiting for cluster init =="
+for i in $(seq 1 60); do
+  if curl -fsu Administrator:password http://localhost:8091/pools/default >/dev/null 2>&1; then break; fi
+  sleep 5
+done
+
+echo "== fetching cluster CA =="
+curl -fsu Administrator:password http://localhost:8091/pools/default/certificate > "$CERT"
+if ! grep -q "BEGIN CERTIFICATE" "$CERT"; then
+  echo "FAIL: could not fetch cluster CA"; exit 1
+fi
+
+NET="$(docker inspect cb-data-1 -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')"
+
+# run_observer <name> <hostport> <extra args...> ; leaves container running
+run_observer() {
+  local name="$1" port="$2"; shift 2
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker run -d --name "$name" --network "$NET" -p "$port:$port" \
+    -v "$CERT:/ca.pem:ro" "$IMAGE" \
+    --conn=couchbases://cb-data-1.local --bucket=travel-sample \
+    --user=Administrator --pass=password --critical=kv --addr=":$port" "$@" >/dev/null
+}
+
+# poll_status <hostport> -> prints final global status seen within the window
+poll_status() {
+  local port="$1" last=""
+  for i in $(seq 1 24); do
+    last="$(curl -s "http://localhost:$port/health/couchbase" | jq -r '.status // empty' 2>/dev/null)"
+    [ -n "$last" ] && echo "$last" && return 0
+    sleep 5
+  done
+  echo "${last:-NONE}"
+}
+
+assert() { # <label> <got> <want>
+  if [ "$2" = "$3" ]; then echo "PASS: $1 ($2)"; else echo "FAIL: $1 (got=$2 want=$3)"; FAIL=1; fi
+}
+
+echo "== case 1: --tls-cert-path -> UP =="
+run_observer cb-observer-tls 8082 --tls-cert-path=/ca.pem
+assert "cert-path" "$(poll_status 8082)" "UP"
+docker rm -f cb-observer-tls >/dev/null 2>&1 || true
+
+echo "== case 2: --tls-skip-verify -> UP =="
+run_observer cb-observer-tls 8083 --tls-skip-verify
+assert "skip-verify" "$(poll_status 8083)" "UP"
+docker rm -f cb-observer-tls >/dev/null 2>&1 || true
+
+echo "== case 3 (negative): no TLS flags -> DOWN =="
+run_observer cb-observer-tls 8084
+assert "no-flags-verify-fails" "$(poll_status 8084)" "DOWN"
+docker rm -f cb-observer-tls >/dev/null 2>&1 || true
+
+if [ "$FAIL" -eq 0 ]; then echo "== ALL TLS E2E PASSED =="; else echo "== TLS E2E FAILED =="; fi
+exit "$FAIL"
