@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
@@ -68,7 +68,7 @@ jobs:
       - uses: helm/kind-action@v1
         with:
           install_only: true
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: region-switch kind e2e
         run: test/kind/e2e_switch.sh
       - name: dump cluster state on failure
