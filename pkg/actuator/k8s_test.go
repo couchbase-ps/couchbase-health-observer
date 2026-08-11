@@ -1,7 +1,10 @@
 package actuator
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -59,6 +62,54 @@ func TestSwitchIdempotent(t *testing.T) {
 	}
 	if switched {
 		t.Error("expected no-op when already on secondary")
+	}
+}
+
+func TestSwitchLogsPatchAndRoll(t *testing.T) {
+	cs := seed()
+	var buf bytes.Buffer
+	a := newActuator(cs, false)
+	a.Log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if _, err := a.Switch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "msg=configmap_patch") || !strings.Contains(out, "to=couchbase://region-b") {
+		t.Errorf("missing configmap_patch: %q", out)
+	}
+	if !strings.Contains(out, "msg=deployment_roll") || !strings.Contains(out, "deployment=mock-app") {
+		t.Errorf("missing deployment_roll: %q", out)
+	}
+}
+
+func TestSwitchNoOpIsSilent(t *testing.T) {
+	cs := seed()
+	cm, _ := cs.CoreV1().ConfigMaps("default").Get(context.Background(), "cb-conn", metav1.GetOptions{})
+	cm.Data["connstring"] = "couchbase://region-b"
+	cs.CoreV1().ConfigMaps("default").Update(context.Background(), cm, metav1.UpdateOptions{})
+	var buf bytes.Buffer
+	a := newActuator(cs, false)
+	a.Log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if _, err := a.Switch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "configmap_patch") {
+		t.Errorf("no-op switch should not log a patch: %q", buf.String())
+	}
+}
+
+func TestSwitchErrorsWhenConfigMapMissing(t *testing.T) {
+	// The loop logs actuation_error when Switch returns a non-nil error; verify
+	// the actuator surfaces one (rather than silently no-op'ing) on a k8s fault.
+	cs := seed()
+	a := newActuator(cs, false)
+	a.Cfg.ConfigMap = "does-not-exist"
+	switched, err := a.Switch(context.Background())
+	if err == nil {
+		t.Fatal("expected an error when the configmap is missing")
+	}
+	if switched {
+		t.Error("switched must be false when actuation errors")
 	}
 }
 

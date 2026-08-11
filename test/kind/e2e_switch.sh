@@ -111,6 +111,29 @@ echo "== build and load observer image =="
 docker build -t "$OBSERVER_IMAGE" "$ROOT"
 kind load docker-image "$OBSERVER_IMAGE" --name "$KIND_CLUSTER"
 
+echo "== preload official Couchbase images into kind =="
+# Each kind node otherwise pulls these from Docker Hub independently; with 6
+# server pods + 2 operators that is many anonymous pulls of the same big
+# images, which Docker Hub rate-limits and stalls (pod stuck ContainerCreating
+# past the progress deadline). Pull once on the host, load into every node.
+# NB: load via a single-platform `docker save` archive, NOT `kind load
+# docker-image`. Docker's containerd image store keeps the full multi-platform
+# manifest list, so `kind load docker-image` fails with
+# "ctr: content digest <sha> not found" (it exports a manifest referencing
+# platforms whose content is absent locally). `docker save --platform` exports
+# only this node's arch, which `kind load image-archive` imports cleanly.
+case "$(uname -m)" in
+  aarch64|arm64) LOAD_PLATFORM=linux/arm64 ;;
+  *)             LOAD_PLATFORM=linux/amd64 ;;
+esac
+for img in couchbase/operator:2.9.2 couchbase/admission-controller:2.9.2 couchbase/server:8.0.1; do
+  docker image inspect "$img" >/dev/null 2>&1 || docker pull --platform "$LOAD_PLATFORM" "$img"
+  archive="$(mktemp)"
+  docker save --platform "$LOAD_PLATFORM" "$img" -o "$archive"
+  kind load image-archive "$archive" --name "$KIND_CLUSTER"
+  rm -f "$archive"
+done
+
 echo "== build the pinned official Couchbase chart dependency =="
 # The chart depends on the couchbase-operator repo; `helm dependency build`
 # needs it registered locally (present on a dev box, absent on a clean CI runner).
@@ -222,6 +245,17 @@ grep -q 'connstring=couchbase://region-b-srv.region-b.svc' <<<"$APP_LOGS"
 
 echo "PASS: active observer switched cb-conn and rolled mock-app"
 
+# Verbose logging: the switch must emit the structured events (design 20260811).
+SWITCH_LOGS="$(kubectl logs deployment/observer --tail=500)"
+for ev in "SWITCHED " "Patching ConfigMap " "Rolling deployment "; do
+  if ! grep -q "$ev" <<<"$SWITCH_LOGS"; then
+    echo "FAIL: observer log missing event: $ev"
+    echo "$SWITCH_LOGS" | tail -40
+    exit 1
+  fi
+done
+echo "PASS: switch emitted switched + configmap_patch + deployment_roll"
+
 # Scenario C: the observer restarts (cold start) into a region-a that is ALREADY
 # DOWN while cb-conn still points at primary -- as if the previous instance died
 # before it could react to the outage. region-a is already gone from scenario B
@@ -244,6 +278,7 @@ kubectl scale deployment/observer --replicas=1
 # Cold-start into a DOWN primary: the observer is intentionally NOT Ready until its
 # first health evaluation completes (/readyz gates on firstEval), and readiness does
 # NOT gate the switch loop. Wait for the pod to be Running, then assert on the switch.
+until kubectl get pod -l app=observer -o name 2>/dev/null | grep -q .; do sleep 1; done # RS may not have created the pod yet -> avoid "no matching resources found"
 kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
 
 echo "== wait for ConfigMap switch =="
@@ -287,6 +322,7 @@ echo "cold-starting observer; region-a still DOWN, cb-conn already on secondary"
 kubectl scale deployment/observer --replicas=1
 # Same as scenario C: cold-start into a DOWN primary is not Ready until the first
 # evaluation; wait for Running, not Ready.
+until kubectl get pod -l app=observer -o name 2>/dev/null | grep -q .; do sleep 1; done # RS may not have created the pod yet -> avoid "no matching resources found"
 kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
 
 echo "asserting cb-conn stays region-b for ~45s (> FailoverDelay)..."
@@ -301,8 +337,19 @@ for _ in $(seq 1 22); do
 done
 ROLL_AFTER="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
 [[ "$ROLL_AFTER" == "$ROLL_BEFORE" ]] || { echo "FAIL: mock-app rolled again on adopt (want no roll)"; exit 1; }
-kubectl logs deployment/observer | grep -q "adopting switched state" || {
+# Retry the log check: the adopt line is emitted once at startup, but a lone
+# `kubectl logs` right after a pod restart can transiently miss it, so poll like
+# every other assertion here rather than one-shot.
+ADOPT_LOGGED=0
+for _ in $(seq 1 15); do
+  if kubectl logs deployment/observer 2>/dev/null | grep -q "Adopting already-switched"; then
+    ADOPT_LOGGED=1; break
+  fi
+  sleep 2
+done
+[[ "$ADOPT_LOGGED" == "1" ]] || {
   echo "FAIL: observer did not log the adopt path"
+  kubectl logs deployment/observer --tail=100 || true
   exit 1
 }
 echo "PASS: cold-start adopt, no re-switch, no app roll"

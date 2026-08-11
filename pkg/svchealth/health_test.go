@@ -41,7 +41,7 @@ func TestComputeNonCriticalServiceDownDegraded(t *testing.T) {
 	if r.Services["query"].Status != "DOWN" {
 		t.Errorf("query should still show DOWN for observability")
 	}
-	if r.Reason != `non-critical service "query" has 2 non reachable endpoint(s)` {
+	if r.Reason != `non-critical service "query" has 2/2 endpoint(s) unreachable` {
 		t.Errorf("degraded reason wrong: %q", r.Reason)
 	}
 }
@@ -59,7 +59,7 @@ func TestComputeCriticalDownReason(t *testing.T) {
 	// Reason must report NON-reachable endpoint count, not reachable count.
 	probes := []Probe{p("kv", "d1", true), p("kv", "d2", true), p("kv", "d3", false)}
 	r := Compute(probes, []string{"kv"}, "t")
-	if r.Reason != `critical service "kv" has 1 non reachable endpoint(s)` {
+	if r.Reason != `critical service "kv" has 1/3 endpoint(s) unreachable` {
 		t.Errorf("critical down reason wrong: %q", r.Reason)
 	}
 }

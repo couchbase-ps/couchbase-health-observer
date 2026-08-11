@@ -2,6 +2,19 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## Verbose leveled logging (2026-08-11, #20)
+
+Observer now logs via `log/slog` (text). `pkg/obslog` builds the logger + parses
+`--log-level` (adds custom `TRACE`). Active loop + actuator emit named events
+(msg=<event> + typed fields): health (INFO on status change, DEBUG steady;
+carries switched + active_region + sustained_down_s), cluster_detail/cluster_nodes
+(DEBUG), probe (TRACE), cluster_map[_change] (node added INFO / removed WARN),
+failover_countdown_start, configmap_patch + deployment_roll (actuator), switched.
+Health reason now shows the reachable fraction (X/Y). node status is SDK-honest
+(reachable|unreachable, never failover). Webhook + node failover state are out of
+scope (spec: "20260811 Observer verbose logging design").
+Note: health field switched=decision-made (machine latched), not actuation-confirmed; a failed switch still logs actuation_error.
+
 ## Commit convention + release (2026-06-24)
 
 Adopted **gitmoji** commits (matching `ps-knowledge-hub`): `<emoji>(scope) #<issue>: <desc>`.

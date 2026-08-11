@@ -90,3 +90,25 @@ func TestAlreadySwitchedSeedNeverFires(t *testing.T) {
 		t.Fatal("seeded already-switched machine must never fire")
 	}
 }
+
+func TestMachineSwitchedFlag(t *testing.T) {
+	now := time.Unix(0, 0)
+	m := New(Config{FailoverDelay: 10 * time.Second, Now: func() time.Time { return now }})
+	if m.Switched() {
+		t.Fatal("fresh machine should not be switched")
+	}
+	m.Observe("DOWN") // starts the clock
+	now = now.Add(11 * time.Second)
+	if r := m.Observe("DOWN"); !r.SwitchRequired {
+		t.Fatal("switch should be required after the delay")
+	}
+	if !m.Switched() {
+		t.Error("machine should latch switched=true after SwitchRequired")
+	}
+}
+
+func TestMachineSwitchedSeed(t *testing.T) {
+	if !New(Config{AlreadySwitched: true}).Switched() {
+		t.Error("AlreadySwitched should seed Switched()=true")
+	}
+}

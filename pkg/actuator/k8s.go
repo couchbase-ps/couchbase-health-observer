@@ -3,6 +3,7 @@ package actuator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,14 @@ type K8sActuator struct {
 	Client kubernetes.Interface
 	Cfg    Config
 	Now    func() string // injectable timestamp; defaults to RFC3339 now
+	Log    *slog.Logger  // nil -> slog.Default()
+}
+
+func (a *K8sActuator) log() *slog.Logger {
+	if a.Log != nil {
+		return a.Log
+	}
+	return slog.Default()
 }
 
 func (a *K8sActuator) Switch(ctx context.Context) (bool, error) {
@@ -36,7 +45,11 @@ func (a *K8sActuator) Switch(ctx context.Context) (bool, error) {
 	if cm.Data == nil {
 		cm.Data = map[string]string{}
 	}
+	from := cm.Data[a.Cfg.ConfigKey]
 	cm.Data[a.Cfg.ConfigKey] = a.Cfg.Secondary
+	a.log().Info("configmap_patch",
+		"configmap", a.Cfg.ConfigMap, "namespace", a.Cfg.Namespace,
+		"key", a.Cfg.ConfigKey, "from", from, "to", a.Cfg.Secondary)
 	if _, err := a.Client.CoreV1().ConfigMaps(a.Cfg.Namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		return false, fmt.Errorf("update configmap: %w", err)
 	}
@@ -53,6 +66,7 @@ func (a *K8sActuator) Switch(ctx context.Context) (bool, error) {
 		if _, err := a.Client.AppsV1().Deployments(a.Cfg.Namespace).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
 			return false, fmt.Errorf("roll deployment %s: %w", name, err)
 		}
+		a.log().Info("deployment_roll", "deployment", name, "namespace", a.Cfg.Namespace)
 	}
 	return true, nil
 }

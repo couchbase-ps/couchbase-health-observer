@@ -69,7 +69,8 @@ func Compute(probes []Probe, critical []string, checkedAt string) Report {
 		}
 		if sh.Status == "DOWN" {
 			global = "DOWN"
-			reason = fmt.Sprintf("critical service %q has %d non reachable endpoint(s)", svc, len(sh.Unreachable))
+			total := sh.Reachable + len(sh.Unreachable)
+			reason = fmt.Sprintf("critical service %q has %d/%d endpoint(s) unreachable", svc, len(sh.Unreachable), total)
 			break
 		}
 	}
@@ -82,7 +83,9 @@ func Compute(probes []Probe, critical []string, checkedAt string) Report {
 			}
 			if services[name].Status == "DOWN" {
 				global = "DEGRADED"
-				reason = fmt.Sprintf("non-critical service %q has %d non reachable endpoint(s)", name, len(services[name].Unreachable))
+				sh := services[name]
+				total := sh.Reachable + len(sh.Unreachable)
+				reason = fmt.Sprintf("non-critical service %q has %d/%d endpoint(s) unreachable", name, len(sh.Unreachable), total)
 				break
 			}
 		}

@@ -2,6 +2,7 @@ package svchealth
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/couchbase/gocb/v2"
@@ -71,6 +72,13 @@ func serviceName(s gocb.ServiceType) string {
 }
 
 func hostOnly(hostport string) string {
+	// Query/search endpoints arrive as "http://host:port"; strip the scheme so a
+	// node maps to a single host (KV endpoints have none). Without this the same
+	// node shows up twice (e.g. "10.0.0.3" and "http://10.0.0.3") in the per-node
+	// view and inflates the node count.
+	if i := strings.Index(hostport, "://"); i >= 0 {
+		hostport = hostport[i+3:]
+	}
 	for i := len(hostport) - 1; i >= 0; i-- {
 		if hostport[i] == ':' {
 			return hostport[:i]

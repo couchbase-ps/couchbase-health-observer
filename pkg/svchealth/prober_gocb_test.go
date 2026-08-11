@@ -8,6 +8,20 @@ import (
 	"github.com/couchbase/gocb/v2"
 )
 
+func TestHostOnlyStripsSchemeAndPort(t *testing.T) {
+	cases := map[string]string{
+		"172.19.0.3:11210":       "172.19.0.3", // KV endpoint: host:port, no scheme
+		"http://172.19.0.3:8093": "172.19.0.3", // query endpoint: scheme must be stripped too
+		"https://node-a:18093":   "node-a",     // TLS query endpoint
+		"172.19.0.3":             "172.19.0.3", // bare host
+	}
+	for in, want := range cases {
+		if got := hostOnly(in); got != want {
+			t.Errorf("hostOnly(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // A cold start against a cluster that never bootstraps must not wedge the loop:
 // Probe has to return within roughly its Timeout, not block indefinitely. Uses a
 // TEST-NET-1 address (RFC 5737, non-routable) so no real cluster is needed.
