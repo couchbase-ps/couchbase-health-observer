@@ -60,6 +60,8 @@ go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve
 test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
 ```
 
+`--log-level trace|debug|info|warn|error` (default `info`). Human-readable lines via a custom slog handler (`pkg/obslog` `NewHuman`): `HH:mm:ss.SSS LEVEL <component> <prose>` (components: observer/health/failover/actuator/cluster/probe). Events + levels + attrs unchanged, so a JSON handler is a later drop-in swap. INFO=state changes+switch actions; DEBUG=per-tick cluster detail; TRACE=per-endpoint ping. Events: `startup`, `active_config`, `adopt_switched`, `liveness_window_tight`, `probe`, `health`, `cluster_detail`, `cluster_nodes`, `cluster_map[_change]`, `failover_countdown_start`, `switch_required/held/skipped`, `secondary_connect_failed`, `configmap_patch`, `deployment_roll`, `switched`, `switch_noop`, `actuation_error`.
+
 CI: `ci.yml` fast gate (fmt/vet/build/unit + terraform) runs on PRs + is
 `workflow_call`ed by publish/release. `e2e.yml` runs GitHub-safe e2e in parallel
 on PRs (all green, blocking, on ubuntu-latest): compose e2e, compose TLS e2e,

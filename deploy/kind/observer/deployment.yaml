@@ -20,6 +20,7 @@ spec:
           imagePullPolicy: Never
           args:
             - --mode=active
+            - --log-level=debug
             - --conn=couchbase://region-a-srv.region-a.svc
             - --bucket=observer
             - --user=Administrator

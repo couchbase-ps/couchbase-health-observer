@@ -64,3 +64,8 @@ func (m *Machine) DownSeconds(now time.Time) float64 {
 	}
 	return now.Sub(m.firstDownAt).Seconds()
 }
+
+// Switched reports whether the machine has latched a switch (seeded from
+// AlreadySwitched, or set true once a switch was required). Feeds the loop's
+// per-tick "switched" log field.
+func (m *Machine) Switched() bool { return m.switched }

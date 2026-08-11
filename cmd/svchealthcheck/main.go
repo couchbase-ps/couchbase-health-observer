@@ -11,8 +11,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/couchbase/gocb/v2"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/actuator"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/metrics"
+	"github.com/couchbaselabs/couchbase-health-observer/pkg/obslog"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/probes"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/state"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/svchealth"
@@ -48,14 +51,24 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "active mode: log the switch but make no changes")
 	tlsCertPath := flag.String("tls-cert-path", "", "path to a PEM CA cert to trust for couchbases:// TLS")
 	tlsSkipVerify := flag.Bool("tls-skip-verify", false, "skip TLS server-certificate verification (insecure)")
+	logLevel := flag.String("log-level", "info", "trace|debug|info|warn|error")
 	flag.Parse()
+
+	lvl, err := obslog.Parse(*logLevel)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	logger := obslog.NewHuman(os.Stderr, lvl)
+	slog.SetDefault(logger)
+	ctx := context.Background()
 
 	// Liveness (/healthz) trips when the loop goes 3*interval without a tick. Each
 	// iteration runs two sequential pings, each bounded by probe-timeout, so keep
 	// 2*probe-timeout < 3*interval or a probe against a down cluster can starve the
 	// heartbeat and get the pod restarted instead of switched.
 	if 2*(*probeTimeout) >= 3*(*interval) {
-		log.Printf("WARNING: 2*probe-timeout (%s) >= liveness window 3*interval (%s); lower --probe-timeout or raise --interval", 2*(*probeTimeout), 3*(*interval))
+		logger.Warn("liveness_window_tight", "twice_probe_timeout", 2*(*probeTimeout), "window", 3*(*interval))
 	}
 
 	if os.Getenv("GOCB_VERBOSE") != "" {
@@ -117,7 +130,7 @@ func main() {
 	}))
 	mux.Handle("/metrics", metrics.Handler())
 	go func() {
-		log.Printf("listening on %s (mode=%s critical=%s)", *addr, *mode, *critical)
+		logger.Info("startup", "mode", *mode, "critical", *critical, "addr", *addr)
 		log.Fatal(http.ListenAndServe(*addr, mux))
 	}()
 
@@ -127,16 +140,27 @@ func main() {
 	}
 
 	// Active mode: build the actuator (reusing the client made for readiness) and run the loop.
-	act := &actuator.K8sActuator{Client: k8sClient, Cfg: actuator.Config{
+	act := &actuator.K8sActuator{Client: k8sClient, Log: logger, Cfg: actuator.Config{
 		Namespace: *namespace, ConfigMap: *configMap, ConfigKey: *configKey,
 		Deployments: strings.Split(*deployments, ","), Secondary: *secondary, DryRun: *dryRun,
 	}}
-	alreadySwitched := reconcileAlreadySwitched(context.Background(), k8sClient, *namespace, *configMap, *configKey, *secondary)
+	// Cluster identities for the logs: a fixed role (primary = --conn, secondary
+	// = --secondary-conn) plus the addresses (all hosts, scheme+port stripped).
+	// Per-tick lines use the short role; the startup mapping and the
+	// switch-narrative lines carry role + address, e.g. "primary (10.0.1.5, 10.0.1.6)".
+	primaryAddr := obslog.AddressList(*conn)
+	secondaryAddr := obslog.AddressList(*secondary)
+	primaryDisp := "primary (" + primaryAddr + ")"
+	secondaryDisp := "secondary (" + secondaryAddr + ")"
+
+	alreadySwitched := reconcileAlreadySwitched(ctx, k8sClient, *namespace, *configMap, *configKey, *secondary)
 	if alreadySwitched {
-		log.Printf("startup: configmap already on secondary %q; adopting switched state, apps NOT rolled, primary DOWN is expected", *secondary)
+		logger.Info("adopt_switched", "secondary", secondaryDisp)
 	}
 	machine := state.New(state.Config{FailoverDelay: *failoverDelay, AlreadySwitched: alreadySwitched})
-	log.Printf("active mode: failover-delay=%s secondary=%q deployments=%q dryRun=%v alreadySwitched=%v", *failoverDelay, *secondary, *deployments, *dryRun, alreadySwitched)
+	logger.Info("clusters", "primary", primaryAddr, "secondary", secondaryAddr)
+	logger.Info("active_config", "failover_delay", *failoverDelay,
+		"deployments", *deployments, "dry_run", *dryRun, "already_switched", alreadySwitched)
 
 	primaryRegion := regionLabel(*conn)
 	secondaryRegion := regionLabel(*secondary)
@@ -158,18 +182,29 @@ func main() {
 			_ = sb.WaitUntilReady(5*time.Second, nil)
 			secondaryProber = &svchealth.GocbProber{Cluster: sc, Bucket: sb, Timeout: *probeTimeout}
 		} else {
-			log.Printf("secondary connect failed (guard will treat secondary as DOWN): %v", err)
+			logger.Warn("secondary_connect_failed", "err", err)
 		}
 	}
+
+	activeRole := "primary"
+	activeDisp := primaryDisp
+	if alreadySwitched {
+		activeRole = "secondary"
+		activeDisp = secondaryDisp
+	}
+	lastStatus := ""                  // forces INFO on the first tick
+	var lastHosts map[string]struct{} // nil until the first round is seen
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 	for range ticker.C {
 		hb.Tick()
-		probes, _ := prober.Probe(context.Background())
-		rep := svchealth.Compute(probes, crit, time.Now().UTC().Format(time.RFC3339))
+		probeSet, _ := prober.Probe(ctx)
+		now := time.Now().UTC()
+		rep := svchealth.Compute(probeSet, crit, now.Format(time.RFC3339))
 		firstEval.Store(true)
 		metrics.LoopLastTick.Set(float64(time.Now().Unix()))
+
 		// DEGRADED counts as up: the critical path is healthy (mirrors /health/couchbase 200).
 		up := 0.0
 		if rep.Status != "DOWN" {
@@ -185,15 +220,55 @@ func main() {
 		}
 		res := machine.Observe(rep.Status)
 		metrics.SustainedDownSeconds.Set(machine.DownSeconds(time.Now()))
-		log.Printf("status=%s reason=%q switchRequired=%v", rep.Status, rep.Reason, res.SwitchRequired)
+
+		// DEBUG: one summary line per tick. TRACE: the full per-node breakdown
+		// (which node, which service) — the per-endpoint detail lives here, no
+		// separate line-per-ping.
+		nodes := svchealth.ByNode(probeSet)
+		healthy, total := svchealth.NodeSummary(nodes)
+		logger.Debug("cluster_detail", "listening", activeRole, "primary_conn", *conn,
+			"secondary_conn", *secondary, "namespace", *namespace, "nodes", fmt.Sprintf("%d/%d", healthy, total))
+		logger.Log(ctx, obslog.LevelTrace, "cluster_nodes", "region", activeRole, "nodes", svchealth.RenderNodes(nodes))
+
+		// Cluster-map delta (INFO added / WARN removed / INFO new map on change).
+		cur := svchealth.HostSet(probeSet)
+		if lastHosts == nil {
+			logger.Info("cluster_map", "nodes", sortedHosts(cur))
+		} else {
+			added, removed := svchealth.DiffHosts(lastHosts, cur)
+			for _, h := range removed {
+				logger.Warn("cluster_map_change", "action", "removed", "host", h, "cluster", activeRole)
+			}
+			for _, h := range added {
+				logger.Info("cluster_map_change", "action", "added", "host", h, "cluster", activeRole)
+			}
+			if len(added)+len(removed) > 0 {
+				logger.Info("cluster_map", "nodes", sortedHosts(cur))
+			}
+		}
+		lastHosts = cur
+
+		// Countdown start: first DOWN of a new window, not yet switched.
+		changed := rep.Status != lastStatus
+		if rep.Status == "DOWN" && changed && !machine.Switched() {
+			logger.Info("failover_countdown_start", "delay", *failoverDelay, "secondary", secondaryDisp, "active_region", activeDisp)
+		}
+
+		// Health line: INFO on change, DEBUG steady. Carries switched + active_region.
+		logger.Log(ctx, healthLevel(changed), "health",
+			"status", rep.Status, "reason", rep.Reason, "switch_required", res.SwitchRequired,
+			"switched", machine.Switched(), "active_region", activeRole,
+			"sustained_down_s", machine.DownSeconds(time.Now()))
+		lastStatus = rep.Status
+
 		if res.SwitchRequired {
 			if *secondary == "" {
-				log.Printf("switch required but --secondary-conn empty; skipping")
+				logger.Warn("switch_skipped", "reason", "secondary_conn_empty")
 				continue
 			}
 			secStatus := "DOWN"
 			if secondaryProber != nil {
-				sp, _ := secondaryProber.Probe(context.Background())
+				sp, _ := secondaryProber.Probe(ctx)
 				secStatus = svchealth.Compute(sp, crit, time.Now().UTC().Format(time.RFC3339)).Status
 			}
 			secUp := 0.0
@@ -202,27 +277,41 @@ func main() {
 			}
 			metrics.SecondaryUp.Set(secUp)
 			if !secondaryReady(secStatus) {
-				log.Printf("switch held: secondary not ready (status=%s); will retry next tick", secStatus)
+				logger.Warn("switch_held", "reason", "secondary_not_ready", "secondary_status", secStatus)
 				continue
 			}
-			switched, err := act.Switch(context.Background())
+			logger.Info("switch_required", "active_region", activeDisp, "secondary", secondaryDisp)
+			switched, err := act.Switch(ctx)
 			switch {
 			case err != nil:
 				metrics.FailoverErrors.Inc()
-				log.Printf("actuation failed: %v", err)
+				logger.Error("actuation_error", "err", err)
 			case switched:
 				metrics.FailoverTotal.Inc()
 				metrics.LastActuationSuccess.Set(float64(time.Now().Unix()))
 				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
 				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
-				log.Printf("SWITCHED to %s", *secondary)
+				activeRole, activeDisp = "secondary", secondaryDisp
+				logger.Info("switched", "from", primaryDisp, "to", secondaryDisp,
+					"secondary_conn", *secondary, "primary_nodes", sortedHosts(cur))
 			default:
 				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
 				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
-				log.Printf("already on secondary, no-op")
+				activeRole, activeDisp = "secondary", secondaryDisp
+				logger.Info("switch_noop", "active_region", activeDisp)
 			}
 		}
 	}
+}
+
+// sortedHosts renders a host set as a sorted space-joined string for log fields.
+func sortedHosts(set map[string]struct{}) string {
+	hs := make([]string, 0, len(set))
+	for h := range set {
+		hs = append(hs, h)
+	}
+	sort.Strings(hs)
+	return strings.Join(hs, " ")
 }
 
 // mustK8sClient uses KUBECONFIG if set (local / kind), else in-cluster config.
@@ -267,16 +356,7 @@ func secondaryReady(status string) bool { return status != "DOWN" }
 
 // regionLabel extracts a short region name from a couchbase:// connstring, e.g.
 // "couchbase://region-a-srv.region-a.svc" -> "region-a". Empty conn -> "none".
-func regionLabel(conn string) string {
-	if conn == "" {
-		return "none"
-	}
-	h := conn
-	if i := strings.Index(h, "://"); i >= 0 {
-		h = h[i+3:]
-	}
-	if i := strings.Index(h, "."); i >= 0 {
-		h = h[:i]
-	}
-	return strings.TrimSuffix(h, "-srv")
-}
+// regionLabel is the short cluster label used for metrics + log fields. It
+// delegates to obslog.ClusterLabel so DNS srv names and IPv4 connstrings
+// (Emirates) are labeled the same way everywhere.
+func regionLabel(conn string) string { return obslog.ClusterLabel(conn) }
