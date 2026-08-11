@@ -49,12 +49,21 @@ func (m *Machine) Observe(status string) Result {
 		m.inDown = true
 		m.firstDownAt = now
 	}
+	// Request the switch every tick past the delay until it is actually actuated
+	// (the loop calls MarkSwitched on a successful switch). Latching here on the
+	// mere decision would strand the observer on a dead primary if the switch is
+	// held because the secondary was momentarily unreachable.
 	if !m.switched && now.Sub(m.firstDownAt) >= m.cfg.FailoverDelay {
 		res.SwitchRequired = true
-		m.switched = true
 	}
 	return res
 }
+
+// MarkSwitched records that a switch was actually actuated, so the machine stops
+// requesting further switches. Called by the loop only after act.Switch succeeds
+// (or the ConfigMap is already on the secondary); a held or errored switch leaves
+// this unset so the next tick retries. Failback stays manual.
+func (m *Machine) MarkSwitched() { m.switched = true }
 
 // DownSeconds reports how long the current sustained-DOWN window has lasted, or 0
 // when healthy. Feeds the observer_sustained_down_seconds metric.
