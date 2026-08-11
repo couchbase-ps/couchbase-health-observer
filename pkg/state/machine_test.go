@@ -34,7 +34,7 @@ func TestHealthyResetsDownTimer(t *testing.T) {
 	}
 }
 
-func TestSwitchFiresOnce(t *testing.T) {
+func TestSwitchRequiredRepeatsUntilMarked(t *testing.T) {
 	now := time.Unix(0, 0)
 	m := New(Config{FailoverDelay: 1 * time.Second, Now: func() time.Time { return now }})
 	m.Observe("DOWN") // start the timer
@@ -42,9 +42,18 @@ func TestSwitchFiresOnce(t *testing.T) {
 	if !m.Observe("DOWN").SwitchRequired {
 		t.Fatal("expected switch after sustained DOWN")
 	}
+	// Actuation NOT yet confirmed (e.g. the secondary was not ready and the switch
+	// was held): the machine must KEEP requesting the switch so it retries once
+	// the secondary recovers, instead of stranding the observer on a dead primary.
+	now = now.Add(2 * time.Second)
+	if !m.Observe("DOWN").SwitchRequired {
+		t.Fatal("switch must keep being requested until MarkSwitched (held-switch retry)")
+	}
+	// Actuation succeeded -> the loop marks it; no further switches are requested.
+	m.MarkSwitched()
 	now = now.Add(2 * time.Second)
 	if m.Observe("DOWN").SwitchRequired {
-		t.Fatal("switch must fire once, not repeatedly")
+		t.Fatal("switch must not be requested again once actuation is confirmed")
 	}
 }
 
@@ -102,8 +111,12 @@ func TestMachineSwitchedFlag(t *testing.T) {
 	if r := m.Observe("DOWN"); !r.SwitchRequired {
 		t.Fatal("switch should be required after the delay")
 	}
+	if m.Switched() {
+		t.Error("must NOT report switched before actuation is confirmed (only the decision was made)")
+	}
+	m.MarkSwitched()
 	if !m.Switched() {
-		t.Error("machine should latch switched=true after SwitchRequired")
+		t.Error("Switched() should be true after MarkSwitched")
 	}
 }
 

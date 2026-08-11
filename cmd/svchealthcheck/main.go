@@ -287,6 +287,7 @@ func main() {
 				metrics.FailoverErrors.Inc()
 				logger.Error("actuation_error", "err", err)
 			case switched:
+				machine.MarkSwitched() // actuation confirmed: stop requesting switches
 				metrics.FailoverTotal.Inc()
 				metrics.LastActuationSuccess.Set(float64(time.Now().Unix()))
 				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
@@ -295,6 +296,7 @@ func main() {
 				logger.Info("switched", "from", primaryDisp, "to", secondaryDisp,
 					"secondary_conn", *secondary, "primary_nodes", sortedHosts(cur))
 			default:
+				machine.MarkSwitched() // ConfigMap already on secondary: already switched
 				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
 				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
 				activeRole, activeDisp = "secondary", secondaryDisp

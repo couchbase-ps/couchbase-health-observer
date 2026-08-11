@@ -2,18 +2,31 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
-## Verbose leveled logging (2026-08-11, #20)
+## Verbose human-readable logging + held-switch fix (2026-08-11, #20)
 
-Observer now logs via `log/slog` (text). `pkg/obslog` builds the logger + parses
-`--log-level` (adds custom `TRACE`). Active loop + actuator emit named events
-(msg=<event> + typed fields): health (INFO on status change, DEBUG steady;
-carries switched + active_region + sustained_down_s), cluster_detail/cluster_nodes
-(DEBUG), probe (TRACE), cluster_map[_change] (node added INFO / removed WARN),
-failover_countdown_start, configmap_patch + deployment_roll (actuator), switched.
-Health reason now shows the reachable fraction (X/Y). node status is SDK-honest
-(reachable|unreachable, never failover). Webhook + node failover state are out of
-scope (spec: "20260811 Observer verbose logging design").
-Note: health field switched=decision-made (machine latched), not actuation-confirmed; a failed switch still logs actuation_error.
+Observer logs via `log/slog` + a custom HUMAN handler (`pkg/obslog` `NewHuman`):
+`HH:mm:ss.SSS LEVEL <component> <prose>` (components observer/health/failover/
+actuator/cluster). `--log-level trace|debug|info|warn|error` (default info; adds
+custom TRACE). Events/levels/attrs stay structured underneath, so a JSON handler
+is a later drop-in. Per tick: INFO on state change else DEBUG (health +
+cluster_detail x/y summary); TRACE adds ONE per-node line (`cluster_nodes`,
+`host UP(svcs)`/`host DOWN(svcs)`); old per-endpoint `probe` lines dropped
+(redundant). Clusters labeled by ROLE + address: startup `clusters` line maps
+all seeds; per-tick health uses short role (`primary`/`secondary`);
+switch-narrative + actuator lines carry role + all addresses. `obslog.ClusterLabel`
+(first host / region collapse) + `AddressList` (all hosts) render IPv4 connstrings
+(Emirates) correctly: strip scheme+port, keep addresses. Health reason shows
+reachable fraction (X/Y); node status SDK-honest (reachable|unreachable). Golden
+`TestHumanCatalog` renders every event; live-verified on kind (A-D).
+
+Held-switch fix: `state.Machine` no longer latches `switched` on the switch
+DECISION. `Observe` requests the switch every tick past `FailoverDelay` until the
+loop calls new `MarkSwitched()` — done ONLY after `act.Switch` actually succeeds
+(or ConfigMap already on secondary). A held switch (secondary not ready) now
+retries each tick until it succeeds instead of stranding the observer on a dead
+primary; health honestly reads "switch required" while held, not "already
+switched". Out of scope: webhook, node failover state, JSON format (spec
+"20260811 Observer verbose logging design").
 
 ## Commit convention + release (2026-06-24)
 
