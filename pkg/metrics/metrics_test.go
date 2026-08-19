@@ -1,6 +1,10 @@
 package metrics
 
-import "testing"
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestSeriesRegisteredAndSettable(t *testing.T) {
 	CouchbaseUp.WithLabelValues("region-a").Set(1)
@@ -16,6 +20,25 @@ func TestSeriesRegisteredAndSettable(t *testing.T) {
 	} {
 		if !exposed(t, name) {
 			t.Errorf("series %q not exposed", name)
+		}
+	}
+}
+
+func TestWebhookMetricsExposed(t *testing.T) {
+	WebhookTotal.WithLabelValues("ok").Inc()
+	WebhookTotal.WithLabelValues("error").Inc()
+	WebhookLastSuccess.Set(1755600000)
+
+	rec := httptest.NewRecorder()
+	Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`observer_webhook_total{result="ok"} 1`,
+		`observer_webhook_total{result="error"} 1`,
+		"observer_webhook_last_success_timestamp_seconds 1.7556e+09",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics is missing %q\n%s", want, body)
 		}
 	}
 }
