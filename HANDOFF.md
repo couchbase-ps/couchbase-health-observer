@@ -283,3 +283,24 @@ kind. Live e2e PASS with all pods scheduled (no Pending).
 an observer that boots into an already-down primary (e.g. a pod reschedule mid-outage)
 will not auto-fail-over on cold start. `TestNoSwitchUntilFirstHealthy` covers it;
 existing tests now `Observe("UP")` first to arm. No auto-failback regardless.
+
+## Task 13 complete (2026-08-19): multi-namespace actuation (#32)
+
+- One central observer now patches N connstring ConfigMaps + rolls N Deployments across
+  namespaces. Targets are `ns/name` (slash only; dots are legal in object names).
+  `--namespace` is the default for unqualified entries, so old manifests keep working.
+- `actuator.Config` holds `ConfigMaps []Ref` + `Deployments []Ref`; `Namespace` is gone.
+  Refs parse at flag/env time (`actuator.ParseRefs`), so bad config dies at startup.
+- Fan-out is best effort: per-target errors joined, a failed namespace does not block the
+  others, `switched=true` only when something changed and nothing failed -> the loop
+  retries until all targets converge. New WARN `roll_skipped` when a Deployment is skipped
+  because its own ConfigMap failed.
+- Rollout stamp `observer/switched-to=<secondary>` (deterministic) + informational
+  `observer/restartedAt`. Skip the roll only when nothing was patched in that namespace
+  AND the stamp already matches, so retries do not double-restart healthy apps while a
+  rewound ConfigMap (e2e scenario C) still rolls.
+- RBAC: `ClusterRole` + one `RoleBinding` per target namespace; `ClusterRoleBinding`
+  documented as the opt-in alternative in `docs/DEPLOYMENT.md`.
+- kind e2e covers two app namespaces (`default/mock-app` unqualified + `app-b/mock-app-b`
+  qualified) in one run. switch-lambda has the same env parsing.
+- Out of scope (follow-ups): per-target `--config-key` override; multi-pod observer HA.

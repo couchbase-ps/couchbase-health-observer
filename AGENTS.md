@@ -12,6 +12,8 @@ Health detection has two signal paths (see durable wiki "Cluster Health Signal D
 
 Full Observer (later phases): health detector → anti-flap state machine (`FailoverDelay`) → REST `/health` API (`observe` mode) → Kubernetes actuator (ConfigMap connstring swap + `rollout restart`) → `active` mode. Failover automated, **failback manual**.
 
+Actuator fans out: N connstring ConfigMaps + N Deployments, each ns-qualified (`ns/name`), best effort, retry until all converge. `--namespace` = default for unqualified entries.
+
 ## Health model (SDK path)
 
 - Service **DOWN if any endpoint unreachable**, **UP** only if all reachable. After auto-failover a node vanishes from cluster map, so ping reads UP (cluster absorbed it).
@@ -25,7 +27,7 @@ Full Observer (later phases): health detector → anti-flap state machine (`Fail
 pkg/svchealth/        SDK per-service health detector (types, prober, Compute, HTTP handler)
 cmd/svchealthcheck/   server exposing /health/couchbase
 deploy/compose/       5-node Couchbase EE 8.0.1 harness for the compose detector stack
-deploy/kind/          kind + official Couchbase Helm switch stack
+deploy/kind/          kind + official Couchbase Helm switch stack (mock-app in default, mock-app-b in app-b)
 deploy/aws/           distributed-quorum AWS aggregation infra (Terraform): monitoring TG + quorum alarm + SNS
 test/<stack>/         per-stack tests, each independently runnable: test/compose, test/kind, test/aws
 HANDOFF.md            running progress log — READ THIS to see what is done and what is next
@@ -60,7 +62,7 @@ go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve
 test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
 ```
 
-`--log-level trace|debug|info|warn|error` (default `info`). Human-readable lines via a custom slog handler (`pkg/obslog` `NewHuman`): `HH:mm:ss.SSS LEVEL <component> <prose>` (components: observer/health/failover/actuator/cluster/probe). Events + levels + attrs unchanged, so a JSON handler is a later drop-in swap. INFO=state changes+switch actions; DEBUG=per-tick cluster detail; TRACE=per-endpoint ping. Events: `startup`, `active_config`, `adopt_switched`, `liveness_window_tight`, `probe`, `health`, `cluster_detail`, `cluster_nodes`, `cluster_map[_change]`, `failover_countdown_start`, `switch_required/held/skipped`, `secondary_connect_failed`, `configmap_patch`, `deployment_roll`, `switched`, `switch_noop`, `actuation_error`.
+`--log-level trace|debug|info|warn|error` (default `info`). Human-readable lines via a custom slog handler (`pkg/obslog` `NewHuman`): `HH:mm:ss.SSS LEVEL <component> <prose>` (components: observer/health/failover/actuator/cluster/probe). Events + levels + attrs unchanged, so a JSON handler is a later drop-in swap. INFO=state changes+switch actions; DEBUG=per-tick cluster detail; TRACE=per-endpoint ping. Events: `startup`, `active_config`, `adopt_switched`, `adopt_mixed`, `liveness_window_tight`, `probe`, `health`, `cluster_detail`, `cluster_nodes`, `cluster_map[_change]`, `failover_countdown_start`, `switch_required/held/skipped`, `secondary_connect_failed`, `configmap_patch`, `deployment_roll`, `roll_skipped`, `switched`, `switch_noop`, `actuation_error`.
 
 CI: `ci.yml` fast gate (fmt/vet/build/unit + terraform) runs on PRs + is
 `workflow_call`ed by publish/release. `e2e.yml` runs GitHub-safe e2e in parallel
