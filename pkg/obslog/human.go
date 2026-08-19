@@ -145,10 +145,16 @@ func renderEvent(event string, f map[string]slog.Value) (component, message stri
 	case "clusters":
 		return "observer", fmt.Sprintf("Clusters: primary=%s, secondary=%s", at("primary"), at("secondary"))
 	case "active_config":
-		return "observer", fmt.Sprintf("Config: failover-delay=%s deployments=[%s] dry-run=%s already-switched=%s",
-			at("failover_delay"), at("deployments"), at("dry_run"), at("already_switched"))
+		return "observer", fmt.Sprintf("Config: failover-delay=%s configmaps=[%s] deployments=[%s] dry-run=%s already-switched=%s",
+			at("failover_delay"), at("configmaps"), at("deployments"), at("dry_run"), at("already_switched"))
 	case "adopt_switched":
 		return "observer", fmt.Sprintf("Adopting already-switched state: now on %s; apps not rolled, primary DOWN expected", at("secondary"))
+	case "adopt_mixed":
+		return "observer", fmt.Sprintf("Mixed startup state: %s of %s ConfigMaps not yet on %s: %s; switch still pending",
+			at("pending_count"), at("total"), at("secondary"), at("pending"))
+	case "target_namespace_unpaired":
+		return "observer", fmt.Sprintf("%s namespace(s) hold a deployment target but no ConfigMap target: %s; those apps read a ConfigMap this observer never patches",
+			at("count"), at("namespaces"))
 	case "liveness_window_tight":
 		return "observer", fmt.Sprintf("Liveness window tight: 2x probe-timeout %s >= 3x interval %s", at("twice_probe_timeout"), at("window"))
 	case "secondary_connect_failed":
@@ -178,9 +184,9 @@ func renderEvent(event string, f map[string]slog.Value) (component, message stri
 	case "cluster_detail":
 		region := at("listening")
 		if nodes := at("nodes"); strings.HasPrefix(nodes, "0/0") {
-			return "cluster", fmt.Sprintf("%s: no nodes in cluster map (ns=%s)", region, at("namespace"))
+			return "cluster", fmt.Sprintf("%s: no nodes in cluster map", region)
 		} else {
-			return "cluster", fmt.Sprintf("%s: %s nodes reachable (ns=%s)", region, nodes, at("namespace"))
+			return "cluster", fmt.Sprintf("%s: %s nodes reachable", region, nodes)
 		}
 	case "cluster_nodes":
 		if n := at("nodes"); n != "" {
@@ -207,7 +213,9 @@ func renderEvent(event string, f map[string]slog.Value) (component, message stri
 	case "switched":
 		return "failover", fmt.Sprintf("SWITCHED active cluster: %s -> %s", at("from"), at("to"))
 	case "switch_noop":
-		return "failover", fmt.Sprintf("Already on %s, no action", at("active_region"))
+		// Scoped to the ConfigMaps on purpose: the same call may still have rolled
+		// Deployments (see roll_only), so this must not claim nothing happened.
+		return "failover", fmt.Sprintf("Already on %s: ConfigMaps needed no change", at("active_region"))
 	case "actuation_error":
 		return "failover", fmt.Sprintf("Actuation failed: %s", at("err"))
 
@@ -216,6 +224,12 @@ func renderEvent(event string, f map[string]slog.Value) (component, message stri
 			at("configmap"), at("namespace"), AddressList(at("from")), AddressList(at("to")))
 	case "deployment_roll":
 		return "actuator", fmt.Sprintf("Rolling deployment %s (ns=%s)", at("deployment"), at("namespace"))
+	case "roll_only":
+		return "actuator", fmt.Sprintf("ConfigMaps already on %s; rolled %s deployment(s) to pick it up",
+			at("secondary"), at("rolled"))
+	case "roll_skipped":
+		return "actuator", fmt.Sprintf("Skipping rollout of %s (ns=%s): %s",
+			at("deployment"), at("namespace"), at("reason"))
 	}
 
 	// Unknown event: keep the name and dump fields so nothing is lost.
