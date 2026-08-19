@@ -136,17 +136,34 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 | `--interval` | `5s` | active-mode poll interval |
 | `--failover-delay` | `150s` | sustained DOWN before switching; set above the cluster auto-failover timeout |
 | `--secondary-conn` | (empty) | connection string to switch to (active mode) |
-| `--namespace` | `default` | Kubernetes namespace (active mode) |
-| `--configmap` | `cb-conn` | ConfigMap holding the connstring (active mode) |
+| `--namespace` | `default` | default namespace for unqualified `--configmap`/`--deployments` entries (active mode) |
+| `--configmap` | `cb-conn` | comma list of connstring ConfigMaps, each `ns/name` or a bare name (active mode) |
 | `--config-key` | `connstring` | key inside that ConfigMap (active mode) |
-| `--deployments` | (empty) | comma-separated Deployments to roll on switch (active mode) |
+| `--deployments` | (empty) | comma list of Deployments to roll on switch, each `ns/name` or a bare name (active mode) |
 | `--dry-run` | `false` | active mode: log the switch but make no changes |
+
+One observer can drive several namespaces in one switch. Qualified and unqualified
+entries mix freely, so an existing single-namespace config keeps working:
+
+```bash
+go run ./cmd/svchealthcheck --mode active \
+  --namespace default \
+  --configmap cb-conn,payments/cb-conn,orders/cb-conn \
+  --deployments mock-app,payments/api,payments/worker,orders/web \
+  --secondary-conn couchbase://region-b-srv.region-b.svc
+```
+
+Every ConfigMap is patched with the same `--config-key`. A target that fails (missing
+ConfigMap, missing RBAC) does not block the others: the observer logs the failure,
+skips only that namespace's Deployments, and retries on its next tick.
 
 Set `GOCB_VERBOSE=1` to enable verbose gocb logging.
 
 In active mode the Kubernetes client uses `KUBECONFIG` if set (local / kind), otherwise
 in-cluster config. The observer ServiceAccount needs `get`/`update` on `configmaps` and
-`deployments` (see `deploy/kind/observer/rbac.yaml`).
+`deployments` in every target namespace. `deploy/kind/observer/rbac.yaml` ships a
+`ClusterRole` plus one `RoleBinding` per target namespace; see `docs/DEPLOYMENT.md` for the
+cluster-wide alternative.
 
 ## Manual testing — Docker Compose (observe mode)
 

@@ -24,19 +24,51 @@ restart-fixable stall; readiness fails (without restart) when the K8s API is
 unreachable, re-checked every period.
 
 ## Prerequisites
-- A `cb-conn` ConfigMap in the namespace with key `connstring`.
+- A `cb-conn` ConfigMap with key `connstring` in every target namespace.
 - The dependent app(s) read `cb-conn` and reconnect on rollout restart.
 - Image pullable: `ghcr.io/couchbase-ps/couchbase-health-observer:latest` (public).
 
 ## RBAC
-`ServiceAccount` + namespaced `Role`/`RoleBinding`: `get/update/patch` ConfigMaps,
-`get/list/update/patch` Deployments. No cluster-wide permissions.
+`ServiceAccount` plus a `ClusterRole` holding `get/update` on ConfigMaps and Deployments,
+bound by one `RoleBinding` per target namespace. The production manifest is
+`deploy/k8s/observer.yaml`; it ships the `ClusterRole` and one `RoleBinding`, in
+`default`. (`deploy/kind/observer/rbac.yaml` is the same shape for the kind test stack,
+bound in `default` and `app-b`.) The verbs match the only calls `pkg/actuator` makes: Get
+and Update on both resources. The observer can only touch the namespaces it is bound in,
+so an unlisted namespace stays unreachable even if a target names it.
+
+**Adding a target namespace means adding a `RoleBinding` for it** in
+`deploy/k8s/observer.yaml`: same `roleRef` (the `observer` `ClusterRole`), same subject
+(the `observer` `ServiceAccount` in `default`), `metadata.namespace` set to the new
+namespace. Without it every Get in that namespace returns `forbidden` for the whole
+outage. Teams that add namespaces often can swap the per-namespace bindings for a single
+`ClusterRoleBinding` instead:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: observer
+subjects:
+  - kind: ServiceAccount
+    name: observer
+    namespace: default
+```
+
+Trade-off: no RBAC change per new namespace, but the observer then holds `get/update` on
+every ConfigMap and Deployment in the cluster.
 
 ## Flags
 `--mode active`, `--conn`, `--secondary-conn`, `--bucket`, `--user`, `--pass`,
 `--critical` (comma list, e.g. `kv`), `--interval`, `--failover-delay` (set above the
 cluster auto-failover timeout so absorbed single-node losses do not trigger a switch),
-`--namespace`, `--configmap`, `--config-key`, `--deployments` (comma list), `--dry-run`.
+`--namespace` (default namespace for unqualified entries), `--configmap` (comma list,
+`ns/name` or bare name), `--config-key` (global, all ConfigMaps), `--deployments` (comma
+list, `ns/name` or bare name), `--dry-run`.
 
 ## Observability
 `GET /metrics` (Prometheus). Key series: `observer_loop_last_tick_timestamp_seconds`,
