@@ -1,9 +1,14 @@
-// Command svchealthcheck serves the SDK per-service health endpoint and, in
-// active mode, drives a region switch when the cluster stays DOWN past
-// FailoverDelay.
+// Command svchealthcheck serves the SDK per-service health endpoint and, when
+// at least one actuator is enabled, drives a region switch after the cluster
+// stays DOWN past FailoverDelay.
 //
-//	observe (default): serve GET /health/couchbase only.
-//	active:            also run a poll loop -> state machine -> Kubernetes actuator.
+//	--actuators empty (default): serve GET /health/couchbase only.
+//	--actuators=k8s:             also run a poll loop -> state machine -> Kubernetes actuator.
+//	--actuators=webhook:         also POST the switch request to an external endpoint.
+//
+// The two actuators combine, e.g. --actuators=k8s,webhook. The Kubernetes
+// actuator patches every connstring ConfigMap named by --configmap and rolls
+// every Deployment named by --deployments, each entry namespace-qualified.
 package main
 
 import (
@@ -22,6 +27,7 @@ import (
 	"github.com/couchbase/gocb/v2"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/actuator"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/metrics"
+	"github.com/couchbaselabs/couchbase-health-observer/pkg/notify"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/obslog"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/probes"
 	"github.com/couchbaselabs/couchbase-health-observer/pkg/state"
@@ -33,7 +39,8 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "observe", "observe | active")
+	mode := flag.String("mode", "", "DEPRECATED: observe | active. Use --actuators instead; removed next release")
+	actuatorList := flag.String("actuators", "", "comma-separated actions on a switch: k8s, webhook (empty = observe only)")
 	conn := flag.String("conn", "couchbase://localhost", "connection string")
 	bucket := flag.String("bucket", "travel-sample", "bucket for KV ping")
 	user := flag.String("user", "Administrator", "admin user")
@@ -43,14 +50,23 @@ func main() {
 	interval := flag.Duration("interval", 5*time.Second, "active poll interval")
 	probeTimeout := flag.Duration("probe-timeout", 2*time.Second, "per-ping bound so a probe against an unreachable cluster returns (DOWN) instead of wedging the loop; keep 2*probe-timeout < 3*interval so the liveness heartbeat stays fresh")
 	failoverDelay := flag.Duration("failover-delay", 150*time.Second, "sustained DOWN before switch; set above the cluster auto-failover timeout")
-	secondary := flag.String("secondary-conn", "", "connection string to switch to (active mode)")
-	namespace := flag.String("namespace", "default", "default k8s namespace for unqualified --configmap/--deployments entries (active mode)")
-	configMap := flag.String("configmap", "cb-conn", "comma list of connstring configmaps, each ns/name or bare name (active mode)")
-	configKey := flag.String("config-key", "connstring", "key in the configmap (active mode)")
-	deployments := flag.String("deployments", "", "comma list of deployments to roll, each ns/name or bare name (active mode)")
-	dryRun := flag.Bool("dry-run", false, "active mode: log the switch but make no changes")
+	secondary := flag.String("secondary-conn", "", "connection string to switch to (needed by every actuator)")
+	namespace := flag.String("namespace", "default", "default k8s namespace for unqualified --configmap/--deployments entries (k8s actuator)")
+	configMap := flag.String("configmap", "cb-conn", "comma list of connstring configmaps, each ns/name or bare name (k8s actuator)")
+	configKey := flag.String("config-key", "connstring", "key in the configmap (k8s actuator)")
+	deployments := flag.String("deployments", "", "comma list of deployments to roll, each ns/name or bare name (k8s actuator)")
+	dryRun := flag.Bool("dry-run", false, "log the switch but make no changes (every actuator)")
 	tlsCertPath := flag.String("tls-cert-path", "", "path to a PEM CA cert to trust for couchbases:// TLS")
 	tlsSkipVerify := flag.Bool("tls-skip-verify", false, "skip TLS server-certificate verification (insecure)")
+	webhookURL := flag.String("webhook-url", "", "switch webhook endpoint (required when --actuators includes webhook)")
+	webhookUser := flag.String("webhook-user", "", "webhook basic-auth user (or env WEBHOOK_USER)")
+	webhookPass := flag.String("webhook-pass", "", "webhook basic-auth password (or env WEBHOOK_PASS)")
+	var webhookHeaders stringList
+	flag.Var(&webhookHeaders, "webhook-header", "extra request header \"Key: Value\"; repeatable (or env WEBHOOK_HEADER, one per line)")
+	webhookTimeout := flag.Duration("webhook-timeout", 3*time.Second, "per-attempt webhook timeout; keep (retries+1)*timeout + backoff < 3*interval")
+	webhookRetries := flag.Int("webhook-retries", 2, "extra webhook attempts after the first")
+	webhookCACert := flag.String("webhook-ca-cert", "", "path to a PEM CA cert to trust for the webhook TLS connection")
+	webhookSkipVerify := flag.Bool("webhook-skip-verify", false, "skip webhook TLS server-certificate verification (insecure)")
 	logLevel := flag.String("log-level", "info", "trace|debug|info|warn|error")
 	flag.Parse()
 
@@ -63,12 +79,55 @@ func main() {
 	slog.SetDefault(logger)
 	ctx := context.Background()
 
-	// Liveness (/healthz) trips when the loop goes 3*interval without a tick. Each
-	// iteration runs two sequential pings, each bounded by probe-timeout, so keep
-	// 2*probe-timeout < 3*interval or a probe against a down cluster can starve the
-	// heartbeat and get the pod restarted instead of switched.
-	if 2*(*probeTimeout) >= 3*(*interval) {
-		logger.Warn("liveness_window_tight", "twice_probe_timeout", 2*(*probeTimeout), "window", 3*(*interval))
+	acts, deprecatedMode, err := parseActuators(*actuatorList, *mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if deprecatedMode {
+		// Suggest the set that is actually in force. Deriving it from acts.K8s
+		// alone told a "--actuators=webhook --mode=active" operator to use
+		// "--actuators=", which reads as "delete your actuator list".
+		logger.Warn("mode_deprecated", "mode", *mode, "replacement", "--actuators="+strings.Join(acts.List(), ","))
+	}
+	// Every webhook input is validated here, at parse time. Doing it later (next
+	// to the notifier assembly) meant a malformed header or an unreadable CA only
+	// failed after gocb.Connect, WaitUntilReady, the HTTP server start and the
+	// ConfigMap reconcile.
+	var webhookParsedHeaders []notify.Header
+	var webhookClient *http.Client
+	if acts.Webhook {
+		if *webhookURL == "" {
+			fmt.Fprintln(os.Stderr, "--actuators includes webhook but --webhook-url is empty")
+			os.Exit(2)
+		}
+		webhookParsedHeaders, err = resolveHeaders(webhookHeaders, "WEBHOOK_HEADER")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		webhookClient, err = notify.NewClient(*webhookCACert, *webhookSkipVerify, *webhookTimeout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
+
+	// Liveness (/healthz) trips when the loop goes 3*interval without a tick. A
+	// switching tick runs the primary ping, then the secondary ping (each bounded
+	// by probe-timeout), then the webhook delivery, so ALL of that lands in one
+	// tick. Warn on the SUM when the webhook actuator is on; the probe pair alone
+	// is the whole budget otherwise.
+	probeBudget := 2 * (*probeTimeout)
+	window := 3 * (*interval)
+	if acts.Webhook {
+		webhookBudget := webhookWorstCase(*webhookTimeout, *webhookRetries)
+		if worst := probeBudget + webhookBudget; worst >= window {
+			logger.Warn("webhook_window_tight", "worst_case", worst,
+				"probe_budget", probeBudget, "webhook_budget", webhookBudget, "window", window)
+		}
+	} else if probeBudget >= window {
+		logger.Warn("liveness_window_tight", "twice_probe_timeout", probeBudget, "window", window)
 	}
 
 	if os.Getenv("GOCB_VERBOSE") != "" {
@@ -93,17 +152,19 @@ func main() {
 	prober := &svchealth.GocbProber{Cluster: cluster, Bucket: b, Timeout: *probeTimeout}
 	crit := strings.Split(*critical, ",")
 
-	// Heartbeat is only meaningful in active mode (there is a loop to stall). In
-	// observe mode it stays nil -> liveness is a static 200.
+	// Heartbeat is only meaningful when the poll loop runs (there is a loop to
+	// stall). Observe-only keeps it nil -> liveness is a static 200.
 	var hb *probes.Heartbeat
-	if *mode == "active" {
+	if acts.Any() {
 		hb = &probes.Heartbeat{}
 	}
 	var firstEval atomic.Bool // set true after the first health evaluation completes
 
-	// K8s client is needed by the readiness check (active mode) and the actuator.
+	// K8s client is needed by the readiness check and the actuator, so it is
+	// built only for the k8s actuator. A webhook-only observer needs no cluster
+	// credentials at all.
 	var k8sClient kubernetes.Interface
-	if *mode == "active" {
+	if acts.K8s {
 		k8sClient = mustK8sClient()
 	}
 
@@ -115,13 +176,13 @@ func main() {
 	// exactly when it must act.
 	mux.HandleFunc("/healthz", probes.Liveness(hb, 3*(*interval), time.Now))
 	// Readiness: config parsed (implicit post-flag.Parse) + first evaluation done +
-	// (active mode) the K8s API is reachable. Re-checked every probe, so a later
+	// (k8s actuator) the K8s API is reachable. Re-checked every probe, so a later
 	// API loss flips the pod NOT READY without ever restarting it.
 	mux.HandleFunc("/readyz", probes.Readiness(func(ctx context.Context) error {
 		if !firstEval.Load() {
 			return fmt.Errorf("no health evaluation completed yet")
 		}
-		if *mode == "active" {
+		if acts.K8s {
 			if _, err := k8sClient.Discovery().ServerVersion(); err != nil {
 				return fmt.Errorf("k8s API unreachable: %v", err)
 			}
@@ -129,37 +190,20 @@ func main() {
 		return nil
 	}))
 	mux.Handle("/metrics", metrics.Handler())
+	modeLabel := "observe"
+	if acts.Any() {
+		modeLabel = "active"
+	}
 	go func() {
-		logger.Info("startup", "mode", *mode, "critical", *critical, "addr", *addr)
+		logger.Info("startup", "mode", modeLabel, "critical", *critical, "addr", *addr)
 		log.Fatal(http.ListenAndServe(*addr, mux))
 	}()
 
-	if *mode != "active" {
+	if !acts.Any() {
 		firstEval.Store(true) // observe-only: ready as soon as the server is up
 		select {}             // just serve
 	}
 
-	// Active mode: build the actuator (reusing the client made for readiness) and run the loop.
-	// Required, not merely parsed: an empty list can never converge, so the loop
-	// must not start in that config.
-	cmRefs, err := actuator.ParseRefsRequired(*configMap, *namespace)
-	if err != nil {
-		log.Fatalf("--configmap: %v", err)
-	}
-	depRefs, err := actuator.ParseRefs(*deployments, *namespace)
-	if err != nil {
-		log.Fatalf("--deployments: %v", err)
-	}
-	// A Deployment target whose namespace has no ConfigMap target rolls once and is
-	// then skipped forever, on a connstring this observer never patches. Warn, not
-	// fatal: the copy could be synced there by other tooling.
-	if unpaired := actuator.UnpairedNamespaces(cmRefs, depRefs); len(unpaired) > 0 {
-		logger.Warn("target_namespace_unpaired", "namespaces", strings.Join(unpaired, " "), "count", len(unpaired))
-	}
-	act := &actuator.K8sActuator{Client: k8sClient, Log: logger, Cfg: actuator.Config{
-		ConfigMaps: cmRefs, ConfigKey: *configKey,
-		Deployments: depRefs, Secondary: *secondary, DryRun: *dryRun,
-	}}
 	// Cluster identities for the logs: a fixed role (primary = --conn, secondary
 	// = --secondary-conn) plus the addresses (all hosts, scheme+port stripped).
 	// Per-tick lines use the short role; the startup mapping and the
@@ -169,22 +213,53 @@ func main() {
 	primaryDisp := "primary (" + primaryAddr + ")"
 	secondaryDisp := "secondary (" + secondaryAddr + ")"
 
-	alreadySwitched, staleRefs := reconcileAlreadySwitched(ctx, k8sClient, cmRefs, *configKey, *secondary)
-	switch {
-	case alreadySwitched:
-		logger.Info("adopt_switched", "secondary", secondaryDisp)
-	case len(staleRefs) > 0 && len(staleRefs) < len(cmRefs):
-		// Some ConfigMaps hold the secondary and some do not: a prior instance died
-		// mid-fan-out. The switch stays pending (the whole delay is served again),
-		// so name the apps still on the old cluster instead of staying silent.
-		logger.Warn("adopt_mixed", "pending", refList(staleRefs),
-			"pending_count", len(staleRefs), "total", len(cmRefs), "secondary", secondaryDisp)
+	// Everything Kubernetes-specific lives behind acts.K8s: the targets, the
+	// actuator itself, and the ConfigMap reconcile. Only the k8s actuator owns
+	// state we can read back, so a webhook-only observer starts unswitched.
+	var cmRefs, depRefs []actuator.Ref
+	var act actuator.Actuator // MUST stay a nil interface when k8s is off: a typed-nil *K8sActuator is not nil
+	alreadySwitched := false
+	if acts.K8s {
+		// Required, not merely parsed: an empty list can never converge, so the
+		// loop must not start in that config.
+		cmRefs, err = actuator.ParseRefsRequired(*configMap, *namespace)
+		if err != nil {
+			log.Fatalf("--configmap: %v", err)
+		}
+		depRefs, err = actuator.ParseRefs(*deployments, *namespace)
+		if err != nil {
+			log.Fatalf("--deployments: %v", err)
+		}
+		// A Deployment target whose namespace has no ConfigMap target rolls once and is
+		// then skipped forever, on a connstring this observer never patches. Warn, not
+		// fatal: the copy could be synced there by other tooling.
+		if unpaired := actuator.UnpairedNamespaces(cmRefs, depRefs); len(unpaired) > 0 {
+			logger.Warn("target_namespace_unpaired", "namespaces", strings.Join(unpaired, " "), "count", len(unpaired))
+		}
+		act = &actuator.K8sActuator{Client: k8sClient, Log: logger, Cfg: actuator.Config{
+			ConfigMaps: cmRefs, ConfigKey: *configKey,
+			Deployments: depRefs, Secondary: *secondary, DryRun: *dryRun,
+		}}
+
+		var staleRefs []actuator.Ref
+		alreadySwitched, staleRefs = reconcileAlreadySwitched(ctx, k8sClient, cmRefs, *configKey, *secondary)
+		switch {
+		case alreadySwitched:
+			logger.Info("adopt_switched", "secondary", secondaryDisp)
+		case len(staleRefs) > 0 && len(staleRefs) < len(cmRefs):
+			// Some ConfigMaps hold the secondary and some do not: a prior instance died
+			// mid-fan-out. The switch stays pending (the whole delay is served again),
+			// so name the apps still on the old cluster instead of staying silent.
+			logger.Warn("adopt_mixed", "pending", refList(staleRefs),
+				"pending_count", len(staleRefs), "total", len(cmRefs), "secondary", secondaryDisp)
+		}
 	}
 	machine := state.New(state.Config{FailoverDelay: *failoverDelay, AlreadySwitched: alreadySwitched})
 	logger.Info("clusters", "primary", primaryAddr, "secondary", secondaryAddr)
 	logger.Info("active_config", "failover_delay", *failoverDelay,
 		"configmaps", refList(cmRefs), "deployments", refList(depRefs),
-		"dry_run", *dryRun, "already_switched", alreadySwitched)
+		"dry_run", *dryRun, "already_switched", alreadySwitched,
+		"actuators", strings.Join(acts.List(), ","))
 
 	primaryRegion := regionLabel(*conn)
 	secondaryRegion := regionLabel(*secondary)
@@ -218,6 +293,28 @@ func main() {
 	}
 	lastStatus := ""                  // forces INFO on the first tick
 	var lastHosts map[string]struct{} // nil until the first round is seen
+
+	// Like act, the notifier stays a nil interface when the webhook actuator is
+	// off, which is how runSwitch knows to skip that path.
+	var notifier notify.Notifier
+	if acts.Webhook {
+		headers, client := webhookParsedHeaders, webhookClient // validated at startup
+		whUser := resolveCred(*webhookUser, "WEBHOOK_USER")
+		if *webhookSkipVerify {
+			logger.Warn("webhook_insecure", "url", notify.RedactURL(*webhookURL))
+		}
+		verify := "on"
+		if *webhookSkipVerify {
+			verify = "OFF"
+		}
+		logger.Info("webhook_target", "url", notify.RedactURL(*webhookURL), "auth", authSummary(whUser, headers),
+			"verify", verify, "timeout", *webhookTimeout, "retries", *webhookRetries)
+		notifier = &notify.HTTP{
+			URL: *webhookURL, User: whUser, Pass: resolveCred(*webhookPass, "WEBHOOK_PASS"),
+			Headers: headers, Client: client, Retries: *webhookRetries,
+			DryRun: *dryRun, Log: logger,
+		}
+	}
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
@@ -305,26 +402,20 @@ func main() {
 				continue
 			}
 			logger.Info("switch_required", "active_region", activeDisp, "secondary", secondaryDisp)
-			switched, err := act.Switch(ctx)
-			switch {
-			case err != nil:
-				metrics.FailoverErrors.Inc()
-				logger.Error("actuation_error", "err", err)
-			case switched:
-				machine.MarkSwitched() // actuation confirmed: stop requesting switches
-				metrics.FailoverTotal.Inc()
-				metrics.LastActuationSuccess.Set(float64(time.Now().Unix()))
+			ev := newSwitchEvent(acts, rep.Reason, machine.DownSeconds(time.Now()),
+				notify.Endpoint{Role: "primary", Conn: *conn, Label: primaryRegion, Nodes: strings.Fields(sortedHosts(cur))},
+				notify.Endpoint{Role: "secondary", Conn: *secondary, Label: secondaryRegion, Status: secStatus},
+				cmRefs, depRefs, *dryRun)
+			deps := switchDeps{Act: act, Notifier: notifier, Log: logger}
+			info := switchInfo{FromDisp: primaryDisp, ToDisp: secondaryDisp, SecondaryConn: *secondary, PrimaryNodes: sortedHosts(cur)}
+			// runSwitch's bool follows whichever path can actually move the
+			// applications (k8s alone when enabled, else the webhook), so one
+			// gate covers the state machine latch and the active-region flip.
+			if runSwitch(ctx, deps, info, ev) {
+				machine.MarkSwitched()
 				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
 				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
 				activeRole, activeDisp = "secondary", secondaryDisp
-				logger.Info("switched", "from", primaryDisp, "to", secondaryDisp,
-					"secondary_conn", *secondary, "primary_nodes", sortedHosts(cur))
-			default:
-				machine.MarkSwitched() // ConfigMap already on secondary: already switched
-				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
-				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
-				activeRole, activeDisp = "secondary", secondaryDisp
-				logger.Info("switch_noop", "active_region", activeDisp)
 			}
 		}
 	}
@@ -359,7 +450,7 @@ func mustK8sClient() kubernetes.Interface {
 		cfg, err = rest.InClusterConfig()
 	}
 	if err != nil {
-		log.Fatalf("k8s config (active mode needs in-cluster or KUBECONFIG): %v", err)
+		log.Fatalf("k8s config (the k8s actuator needs in-cluster or KUBECONFIG): %v", err)
 	}
 	cfg.Timeout = 5 * time.Second // bound readiness ServerVersion() + actuator calls
 	cs, err := kubernetes.NewForConfig(cfg)
