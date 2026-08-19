@@ -37,7 +37,6 @@ spec:
         - name: observer
           image: couchbase-health-observer:dev # replace with your ECR image
           args:
-            - --mode=observe
             - --conn=couchbase://PRIMARY_CB # replace: primary Couchbase (AWS VMs) connstring
             - --bucket=observer
             - --user=Administrator

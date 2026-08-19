@@ -88,7 +88,7 @@ spec:
           image: ghcr.io/couchbase-ps/couchbase-health-observer:latest
           imagePullPolicy: Always
           args:
-            - --mode=active
+            - --actuators=k8s
             - --conn=couchbase://region-a-srv.region-a.svc
             - --secondary-conn=couchbase://region-b-srv.region-b.svc
             - --bucket=observer
@@ -101,6 +101,21 @@ spec:
             - --configmap=cb-conn
             - --config-key=connstring
             - --deployments=mock-app
+            # Webhook: add "webhook" to --actuators (alone, or as k8s,webhook).
+            # - --actuators=k8s,webhook
+            # - --webhook-url=https://gitlab.example.com/api/v4/projects/7/ref/main/trigger/pipeline
+            # - --webhook-header=X-Source: observer
+            # - --webhook-timeout=3s
+            # - --webhook-retries=2
+            # - --webhook-ca-cert=/etc/webhook-ca/ca.pem   # enterprise CA, mount it below
+            # - --webhook-skip-verify                      # insecure, logs a WARN at startup
+          # env:
+          #   - name: WEBHOOK_USER
+          #     valueFrom: { secretKeyRef: { name: observer-webhook, key: user } }
+          #   - name: WEBHOOK_PASS
+          #     valueFrom: { secretKeyRef: { name: observer-webhook, key: pass } }
+          #   - name: WEBHOOK_HEADER      # one "Key: Value" per line
+          #     valueFrom: { secretKeyRef: { name: observer-webhook, key: headers } }
           ports:
             - name: http
               containerPort: 8080

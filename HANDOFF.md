@@ -2,6 +2,37 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## Switch webhook + --actuators (2026-08-19, #31; rebased on multi-ns #32)
+
+Observer can POST switch to external endpoint instead of / beside K8s switch.
+`--mode` replaced by `--actuators=k8s,webhook` (empty = observe; `--mode`
+deprecated 1 release, default `""`, logs WARN `mode_deprecated`). `k8s` in the
+set gates EVERYTHING K8s: client build, `/readyz` API check, `ParseRefs(Required)`
+target parsing, `target_namespace_unpaired` warn, boot ConfigMap reconcile +
+`adopt_switched`/`adopt_mixed`, actuator build. Webhook-only pod needs no RBAC.
+`pkg/notify`: `Notifier` iface + `HTTP` (basic auth, repeatable
+`--webhook-header` for GitLab token, `--webhook-ca-cert`/`--webhook-skip-verify`,
+`--webhook-timeout` 3s x `--webhook-retries` 2, `RedactURL` on every log). Retry
+classes: transport/5xx/429 retried, other 4xx not. `--dry-run` never POSTs.
+Payload declarative (`to.conn`), no dedup key: receiver must skip when already on
+target. `configmaps`/`deployments` are ns-qualified `ns/name` lists, set ONLY when
+`acts.K8s` (`newSwitchEvent`); NO `namespace` field (multi-ns: no single ns to
+report). Loop switch block extracted to `runSwitch` (cmd/svchealthcheck/switch.go):
+latch follows whatever can actually move the apps. k8s enabled -> latch = k8s
+result ALONE (webhook still fires; failure = ERROR + `observer_webhook_total{result=
+error}` + WARN `webhook_dropped`, never blocks a completed failover). webhook-only
+-> latch = webhook result (it IS the actuator, #28 held-switch semantics).
+New events webhook_target/called/retry/failed/dropped/dry_run/body/insecure/
+window_tight + mode_deprecated (golden in TestHumanCatalog); `active_config` now
+renders configmaps AND actuators. Metrics `observer_webhook_total{result}`,
+`observer_webhook_last_success_timestamp_seconds`. Liveness guard: webhook on ->
+warn on probe+webhook worst case (`webhook_window_tight`), else old
+`liveness_window_tight`. kind e2e scenario E: webhook-only observer POSTs to a
+python receiver (`deploy/kind/webhook-receiver`), BOTH cb-conn ConfigMaps
+(default + app-b) rewound to region-a stay untouched, neither mock-app rolls,
+payload carries no `configmaps`/`deployments`. Spec: vault "20260819 Switch
+webhook design".
+
 ## Verbose human-readable logging + held-switch fix (2026-08-11, #20)
 
 Observer logs via `log/slog` + a custom HUMAN handler (`pkg/obslog` `NewHuman`):
