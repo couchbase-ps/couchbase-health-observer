@@ -14,9 +14,11 @@ for c in kind kubectl go; do
   command -v "$c" >/dev/null || { echo "FAIL: required command not found: $c"; exit 1; }
 done
 
+LAMBDA_BADCONFIG_LOG="$(mktemp)"
+
 kind delete cluster --name "$KIND_CLUSTER" >/dev/null 2>&1 || true
 kind create cluster --name "$KIND_CLUSTER" >/dev/null
-trap 'kind delete cluster --name "$KIND_CLUSTER" >/dev/null 2>&1 || true' EXIT
+trap 'rm -f "$LAMBDA_BADCONFIG_LOG"; kind delete cluster --name "$KIND_CLUSTER" >/dev/null 2>&1 || true' EXIT
 
 KUBECONFIG_FILE="$(mktemp)"
 kind get kubeconfig --name "$KIND_CLUSTER" > "$KUBECONFIG_FILE"
@@ -30,9 +32,23 @@ kubectl rollout status deployment/mock-app --timeout=2m
 BASELINE="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
 echo "baseline connstring: $BASELINE"
 
+echo "== assert an invalid target is rejected at startup =="
+if NAMESPACE=default CONFIGMAP=default/ CONFIG_KEY=connstring DEPLOYMENTS=default/mock-app \
+   SECONDARY_CONN="$SECONDARY" KUBECONFIG="$KUBECONFIG_FILE" ONESHOT_EVENT='{}' \
+   go run "$ROOT/cmd/switch-lambda" 2>"$LAMBDA_BADCONFIG_LOG"; then
+  echo "FAIL: invalid CONFIGMAP was accepted"
+  cat "$LAMBDA_BADCONFIG_LOG"
+  exit 1
+fi
+grep -q 'CONFIGMAP' "$LAMBDA_BADCONFIG_LOG" \
+  || { echo "FAIL: startup error did not name CONFIGMAP"; cat "$LAMBDA_BADCONFIG_LOG"; exit 1; }
+echo "invalid target rejected at startup, as expected"
+UNCHANGED="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
+[[ "$UNCHANGED" == "$BASELINE" ]] || { echo "FAIL: rejected run still mutated the configmap"; exit 1; }
+
 echo "== run the switch lambda binary one-shot with a synthetic ALARM event =="
 EVENT='{"Records":[{"Sns":{"Message":"{\"AlarmName\":\"cb-health-quorum-down\",\"NewStateValue\":\"ALARM\"}"}}]}'
-NAMESPACE=default CONFIGMAP=cb-conn CONFIG_KEY=connstring DEPLOYMENTS=mock-app \
+NAMESPACE=default CONFIGMAP=default/cb-conn CONFIG_KEY=connstring DEPLOYMENTS=default/mock-app \
   SECONDARY_CONN="$SECONDARY" KUBECONFIG="$KUBECONFIG_FILE" ONESHOT_EVENT="$EVENT" \
   go run "$ROOT/cmd/switch-lambda"
 
@@ -44,6 +60,9 @@ kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotation
   || { echo "FAIL: deployment was not rolled"; exit 1; }
 
 echo "== assert an OK event does NOT switch back (no auto-failback) =="
+# Bare target names on purpose: the ALARM run above proves the qualified ns/name
+# form, this run proves the bare-name plus NAMESPACE fallback still resolves to
+# the same objects. Between them both target forms are covered end to end.
 OK_EVENT='{"Records":[{"Sns":{"Message":"{\"AlarmName\":\"cb-health-quorum-down\",\"NewStateValue\":\"OK\"}"}}]}'
 NAMESPACE=default CONFIGMAP=cb-conn CONFIG_KEY=connstring DEPLOYMENTS=mock-app \
   SECONDARY_CONN="$SECONDARY" KUBECONFIG="$KUBECONFIG_FILE" ONESHOT_EVENT="$OK_EVENT" \
