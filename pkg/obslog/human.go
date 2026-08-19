@@ -145,8 +145,8 @@ func renderEvent(event string, f map[string]slog.Value) (component, message stri
 	case "clusters":
 		return "observer", fmt.Sprintf("Clusters: primary=%s, secondary=%s", at("primary"), at("secondary"))
 	case "active_config":
-		return "observer", fmt.Sprintf("Config: failover-delay=%s configmaps=[%s] deployments=[%s] dry-run=%s already-switched=%s",
-			at("failover_delay"), at("configmaps"), at("deployments"), at("dry_run"), at("already_switched"))
+		return "observer", fmt.Sprintf("Config: failover-delay=%s configmaps=[%s] deployments=[%s] dry-run=%s already-switched=%s actuators=[%s]",
+			at("failover_delay"), at("configmaps"), at("deployments"), at("dry_run"), at("already_switched"), at("actuators"))
 	case "adopt_switched":
 		return "observer", fmt.Sprintf("Adopting already-switched state: now on %s; apps not rolled, primary DOWN expected", at("secondary"))
 	case "adopt_mixed":
@@ -230,6 +230,37 @@ func renderEvent(event string, f map[string]slog.Value) (component, message stri
 	case "roll_skipped":
 		return "actuator", fmt.Sprintf("Skipping rollout of %s (ns=%s): %s",
 			at("deployment"), at("namespace"), at("reason"))
+
+	case "webhook_target":
+		return "webhook", fmt.Sprintf("Webhook: POST %s (auth: %s, verify: %s, timeout %s, retries %s)",
+			at("url"), at("auth"), at("verify"), at("timeout"), at("retries"))
+	case "webhook_called":
+		return "webhook", fmt.Sprintf("Webhook called: %s -> %s (attempt %s)", at("url"), at("status"), at("attempt"))
+	case "webhook_retry":
+		return "webhook", fmt.Sprintf("Webhook attempt %s/%s failed (%s), retrying in %s",
+			at("attempt"), at("attempts"), at("err"), at("wait"))
+	case "webhook_failed":
+		// This line reports only what pkg/notify knows: the delivery failed after
+		// N attempts. Whether that held the switch latch open depends on the
+		// OTHER actuator's outcome on this same tick, which pkg/notify cannot see
+		// (see cmd/svchealthcheck/switch.go runSwitch). Do not resurrect a
+		// construction-time "blocking" flag here: it can only state what was
+		// enabled at startup, not what happened this tick.
+		return "webhook", fmt.Sprintf("Webhook failed after %s attempts: %s", at("attempts"), at("err"))
+	case "webhook_dropped":
+		return "webhook", fmt.Sprintf("Switch already performed by the Kubernetes actuator (%s); webhook notification dropped: %s",
+			at("active_region"), at("err"))
+	case "webhook_dry_run":
+		return "webhook", fmt.Sprintf("Webhook DRY RUN - would POST %s (%s -> %s)", at("url"), at("from"), at("to"))
+	case "webhook_body":
+		return "webhook", fmt.Sprintf("Webhook body: %s", at("body"))
+	case "webhook_insecure":
+		return "webhook", fmt.Sprintf("Webhook TLS verification DISABLED (insecure) for %s", at("url"))
+	case "webhook_window_tight":
+		return "webhook", fmt.Sprintf("Webhook budget tight: worst case %s (2x probe-timeout %s + webhook %s) >= 3x interval %s",
+			at("worst_case"), at("probe_budget"), at("webhook_budget"), at("window"))
+	case "mode_deprecated":
+		return "observer", fmt.Sprintf("--mode is deprecated and goes away next release; use %s", at("replacement"))
 	}
 
 	// Unknown event: keep the name and dump fields so nothing is lost.
