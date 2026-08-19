@@ -5,11 +5,18 @@ package actuator
 
 import "context"
 
+// Annotation names stamped on a rolled Deployment. AnnSwitchedTo is deterministic
+// (the secondary connstring), so a retry can tell an already-rolled Deployment from
+// one still to roll. AnnRestartedAt is informational.
+const (
+	AnnSwitchedTo  = "observer/switched-to"
+	AnnRestartedAt = "observer/restartedAt"
+)
+
 type Config struct {
-	Namespace   string
-	ConfigMap   string
+	ConfigMaps  []Ref // connstring ConfigMaps to patch, each with its own namespace
 	ConfigKey   string
-	Deployments []string
+	Deployments []Ref  // Deployments to roll, each with its own namespace
 	Secondary   string // connection string to switch to
 	DryRun      bool
 }

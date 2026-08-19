@@ -1,8 +1,9 @@
 // Command switch-lambda is the SNS-triggered entrypoint for the distributed-quorum path.
-// On the CloudWatch quorum alarm it switches the connection-string ConfigMap to the
-// secondary cluster and rolls the dependent Deployments, reusing the same actuator as the
-// centralized observer's active mode. Acts only on the ALARM transition (failback is
-// manual) and is idempotent.
+// On the CloudWatch quorum alarm it switches the connection-string ConfigMaps to the
+// secondary cluster and rolls the dependent Deployments, across every namespace named in
+// CONFIGMAP / DEPLOYMENTS (entries are ns/name, or bare names using NAMESPACE as the
+// default). Reuses the same actuator as the centralized observer's active mode. Acts only
+// on the ALARM transition (failback is manual) and is idempotent.
 package main
 
 import (
@@ -22,17 +23,34 @@ import (
 )
 
 func main() {
+	defaultNS := getenv("NAMESPACE", "default")
+	// Required, not merely parsed: an empty list can never converge, and this
+	// one-shot entrypoint has no retry loop to recover in.
+	cmRefs, err := actuator.ParseRefsRequired(getenv("CONFIGMAP", "cb-conn"), defaultNS)
+	if err != nil {
+		log.Fatalf("CONFIGMAP: %v", err)
+	}
+	depRefs, err := actuator.ParseRefs(os.Getenv("DEPLOYMENTS"), defaultNS)
+	if err != nil {
+		log.Fatalf("DEPLOYMENTS: %v", err)
+	}
+	// A deployment target whose namespace has no configmap target rolls once and is
+	// then skipped forever, on a connstring this switch never patches. Warn, not
+	// fatal: the copy could be synced there by other tooling.
+	if unpaired := actuator.UnpairedNamespaces(cmRefs, depRefs); len(unpaired) > 0 {
+		log.Printf("WARNING: %d namespace(s) hold a deployment target but no configmap target: %s (those apps read a ConfigMap this switch never patches)",
+			len(unpaired), strings.Join(unpaired, " "))
+	}
 	cfg := actuator.Config{
-		Namespace:   getenv("NAMESPACE", "default"),
-		ConfigMap:   getenv("CONFIGMAP", "cb-conn"),
+		ConfigMaps:  cmRefs,
 		ConfigKey:   getenv("CONFIG_KEY", "connstring"),
-		Deployments: splitNonEmpty(os.Getenv("DEPLOYMENTS")),
+		Deployments: depRefs,
 		Secondary:   os.Getenv("SECONDARY_CONN"),
 		DryRun:      os.Getenv("DRY_RUN") == "true",
 	}
 	h := switchhandler.New(&actuator.K8sActuator{Client: mustClientset(), Cfg: cfg})
-	log.Printf("switch-lambda ready: namespace=%s configmap=%s deployments=%q secondary=%q dryRun=%v",
-		cfg.Namespace, cfg.ConfigMap, cfg.Deployments, cfg.Secondary, cfg.DryRun)
+	log.Printf("switch-lambda ready: configmaps=%v deployments=%v secondary=%q dryRun=%v",
+		cfg.ConfigMaps, cfg.Deployments, cfg.Secondary, cfg.DryRun)
 
 	// One-shot mode: if ONESHOT_EVENT holds an SNS event JSON, process it once and exit.
 	// Used by the kind e2e to drive the real binary against a cluster without the Lambda
@@ -54,18 +72,6 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
-}
-
-// splitNonEmpty splits a comma list, dropping empties so an unset DEPLOYMENTS does not
-// become a single "" entry the actuator would try to roll.
-func splitNonEmpty(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // mustClientset builds a Kubernetes client. Precedence:

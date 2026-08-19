@@ -44,10 +44,10 @@ func main() {
 	probeTimeout := flag.Duration("probe-timeout", 2*time.Second, "per-ping bound so a probe against an unreachable cluster returns (DOWN) instead of wedging the loop; keep 2*probe-timeout < 3*interval so the liveness heartbeat stays fresh")
 	failoverDelay := flag.Duration("failover-delay", 150*time.Second, "sustained DOWN before switch; set above the cluster auto-failover timeout")
 	secondary := flag.String("secondary-conn", "", "connection string to switch to (active mode)")
-	namespace := flag.String("namespace", "default", "k8s namespace (active mode)")
-	configMap := flag.String("configmap", "cb-conn", "configmap holding the connstring (active mode)")
+	namespace := flag.String("namespace", "default", "default k8s namespace for unqualified --configmap/--deployments entries (active mode)")
+	configMap := flag.String("configmap", "cb-conn", "comma list of connstring configmaps, each ns/name or bare name (active mode)")
 	configKey := flag.String("config-key", "connstring", "key in the configmap (active mode)")
-	deployments := flag.String("deployments", "", "comma-separated deployments to roll (active mode)")
+	deployments := flag.String("deployments", "", "comma list of deployments to roll, each ns/name or bare name (active mode)")
 	dryRun := flag.Bool("dry-run", false, "active mode: log the switch but make no changes")
 	tlsCertPath := flag.String("tls-cert-path", "", "path to a PEM CA cert to trust for couchbases:// TLS")
 	tlsSkipVerify := flag.Bool("tls-skip-verify", false, "skip TLS server-certificate verification (insecure)")
@@ -140,9 +140,25 @@ func main() {
 	}
 
 	// Active mode: build the actuator (reusing the client made for readiness) and run the loop.
+	// Required, not merely parsed: an empty list can never converge, so the loop
+	// must not start in that config.
+	cmRefs, err := actuator.ParseRefsRequired(*configMap, *namespace)
+	if err != nil {
+		log.Fatalf("--configmap: %v", err)
+	}
+	depRefs, err := actuator.ParseRefs(*deployments, *namespace)
+	if err != nil {
+		log.Fatalf("--deployments: %v", err)
+	}
+	// A Deployment target whose namespace has no ConfigMap target rolls once and is
+	// then skipped forever, on a connstring this observer never patches. Warn, not
+	// fatal: the copy could be synced there by other tooling.
+	if unpaired := actuator.UnpairedNamespaces(cmRefs, depRefs); len(unpaired) > 0 {
+		logger.Warn("target_namespace_unpaired", "namespaces", strings.Join(unpaired, " "), "count", len(unpaired))
+	}
 	act := &actuator.K8sActuator{Client: k8sClient, Log: logger, Cfg: actuator.Config{
-		Namespace: *namespace, ConfigMap: *configMap, ConfigKey: *configKey,
-		Deployments: strings.Split(*deployments, ","), Secondary: *secondary, DryRun: *dryRun,
+		ConfigMaps: cmRefs, ConfigKey: *configKey,
+		Deployments: depRefs, Secondary: *secondary, DryRun: *dryRun,
 	}}
 	// Cluster identities for the logs: a fixed role (primary = --conn, secondary
 	// = --secondary-conn) plus the addresses (all hosts, scheme+port stripped).
@@ -153,14 +169,22 @@ func main() {
 	primaryDisp := "primary (" + primaryAddr + ")"
 	secondaryDisp := "secondary (" + secondaryAddr + ")"
 
-	alreadySwitched := reconcileAlreadySwitched(ctx, k8sClient, *namespace, *configMap, *configKey, *secondary)
-	if alreadySwitched {
+	alreadySwitched, staleRefs := reconcileAlreadySwitched(ctx, k8sClient, cmRefs, *configKey, *secondary)
+	switch {
+	case alreadySwitched:
 		logger.Info("adopt_switched", "secondary", secondaryDisp)
+	case len(staleRefs) > 0 && len(staleRefs) < len(cmRefs):
+		// Some ConfigMaps hold the secondary and some do not: a prior instance died
+		// mid-fan-out. The switch stays pending (the whole delay is served again),
+		// so name the apps still on the old cluster instead of staying silent.
+		logger.Warn("adopt_mixed", "pending", refList(staleRefs),
+			"pending_count", len(staleRefs), "total", len(cmRefs), "secondary", secondaryDisp)
 	}
 	machine := state.New(state.Config{FailoverDelay: *failoverDelay, AlreadySwitched: alreadySwitched})
 	logger.Info("clusters", "primary", primaryAddr, "secondary", secondaryAddr)
 	logger.Info("active_config", "failover_delay", *failoverDelay,
-		"deployments", *deployments, "dry_run", *dryRun, "already_switched", alreadySwitched)
+		"configmaps", refList(cmRefs), "deployments", refList(depRefs),
+		"dry_run", *dryRun, "already_switched", alreadySwitched)
 
 	primaryRegion := regionLabel(*conn)
 	secondaryRegion := regionLabel(*secondary)
@@ -227,7 +251,7 @@ func main() {
 		nodes := svchealth.ByNode(probeSet)
 		healthy, total := svchealth.NodeSummary(nodes)
 		logger.Debug("cluster_detail", "listening", activeRole, "primary_conn", *conn,
-			"secondary_conn", *secondary, "namespace", *namespace, "nodes", fmt.Sprintf("%d/%d", healthy, total))
+			"secondary_conn", *secondary, "nodes", fmt.Sprintf("%d/%d", healthy, total))
 		logger.Log(ctx, obslog.LevelTrace, "cluster_nodes", "region", activeRole, "nodes", svchealth.RenderNodes(nodes))
 
 		// Cluster-map delta (INFO added / WARN removed / INFO new map on change).
@@ -306,6 +330,15 @@ func main() {
 	}
 }
 
+// refList renders refs as a space-joined "ns/name ns/name" string for log fields.
+func refList(refs []actuator.Ref) string {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, r.String())
+	}
+	return strings.Join(out, " ")
+}
+
 // sortedHosts renders a host set as a sorted space-joined string for log fields.
 func sortedHosts(set map[string]struct{}) string {
 	hs := make([]string, 0, len(set))
@@ -336,20 +369,33 @@ func mustK8sClient() kubernetes.Interface {
 	return cs
 }
 
-// reconcileAlreadySwitched reads the connstring ConfigMap once at startup and
-// reports whether it already points to the secondary — i.e. a prior observer
-// instance already switched. Read failure or empty secondary -> false (assume
-// not switched, fail toward acting; the delay + secondary guard still protect).
-func reconcileAlreadySwitched(ctx context.Context, client kubernetes.Interface, namespace, configMap, configKey, secondary string) bool {
-	if secondary == "" {
-		return false
+// reconcileAlreadySwitched reads every connstring ConfigMap once at startup and
+// reports whether they ALL already point to the secondary, i.e. a prior observer
+// instance completed the switch. Mixed state, a read failure, no refs, or an empty
+// secondary all report false: the observer then treats the switch as still pending
+// and converges the rest, which is the safe direction (the failover delay and the
+// secondary-readiness guard still gate any actual switch).
+//
+// It also returns the refs that are NOT on the secondary (unreadable ones included),
+// so a crash mid-fan-out can be reported by name instead of looking like a cold start.
+// Every ref is read, even after one fails, to keep that list complete.
+func reconcileAlreadySwitched(ctx context.Context, client kubernetes.Interface, refs []actuator.Ref, configKey, secondary string) (bool, []actuator.Ref) {
+	if secondary == "" || len(refs) == 0 {
+		return false, nil
 	}
-	cm, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, configMap, metav1.GetOptions{})
-	if err != nil {
-		log.Printf("startup configmap read failed (assuming not switched): %v", err)
-		return false
+	var stale []actuator.Ref
+	for _, ref := range refs {
+		cm, err := client.CoreV1().ConfigMaps(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+		if err != nil {
+			log.Printf("startup configmap read failed for %s (assuming not switched): %v", ref, err)
+			stale = append(stale, ref)
+			continue
+		}
+		if cm.Data[configKey] != secondary {
+			stale = append(stale, ref)
+		}
 	}
-	return cm.Data[configKey] == secondary
+	return len(stale) == 0, stale
 }
 
 // secondaryReady reports whether a computed secondary status permits a switch.
