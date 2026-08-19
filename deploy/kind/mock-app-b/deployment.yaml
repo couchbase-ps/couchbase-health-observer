@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-app-b
+  namespace: app-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-app-b
+  template:
+    metadata:
+      labels:
+        app: mock-app-b
+    spec:
+      containers:
+        - name: mock-app-b
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - while true; do echo "connstring=$CONNSTRING"; sleep 5; done
+          env:
+            - name: CONNSTRING
+              valueFrom:
+                configMapKeyRef:
+                  name: cb-conn
+                  key: connstring

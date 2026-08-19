@@ -12,18 +12,21 @@ metadata:
   name: observer
   namespace: default
 ---
+# One ClusterRole holds the verbs; a RoleBinding per target namespace grants them
+# there only. An unlisted namespace stays unreachable even if a target names it.
+# Verbs match the only calls pkg/actuator makes: Get and Update on both resources.
+# Targeting a further namespace means adding one more RoleBinding for it.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: observer
-  namespace: default
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "update", "patch"]
+    verbs: ["get", "update"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "update", "patch"]
+    verbs: ["get", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -32,7 +35,7 @@ metadata:
   namespace: default
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: observer
 subjects:
   - kind: ServiceAccount

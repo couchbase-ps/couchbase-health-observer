@@ -30,9 +30,9 @@ spec:
             - --failover-delay=30s
             - --secondary-conn=couchbase://region-b-srv.region-b.svc
             - --namespace=default
-            - --configmap=cb-conn
+            - --configmap=cb-conn,app-b/cb-conn
             - --config-key=connstring
-            - --deployments=mock-app
+            - --deployments=mock-app,app-b/mock-app-b
           livenessProbe:
             httpGet:
               path: /healthz

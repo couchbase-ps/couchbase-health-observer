@@ -4,11 +4,12 @@ metadata:
   name: observer
   namespace: default
 ---
+# One ClusterRole holds the verbs; a RoleBinding per target namespace grants them
+# there only. An unlisted namespace stays unreachable even if a target names it.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: observer
-  namespace: default
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -24,7 +25,21 @@ metadata:
   namespace: default
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
+  name: observer
+subjects:
+  - kind: ServiceAccount
+    name: observer
+    namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: observer
+  namespace: app-b
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
   name: observer
 subjects:
   - kind: ServiceAccount

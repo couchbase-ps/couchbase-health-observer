@@ -38,7 +38,9 @@ Observer API : kubectl port-forward deployment/observer 8080:8080
    then curl -s http://localhost:8080/health/couchbase | jq
 Observer logs: kubectl logs -f deployment/observer
 App logs     : kubectl logs -f -l app=mock-app      (shows connstring=...region-a/b...)
+App logs (b) : kubectl logs -f -l app=mock-app-b -n app-b
 cb-conn now  : kubectl get configmap cb-conn -o jsonpath='{.data.connstring}'
+cb-conn (b)  : kubectl get configmap cb-conn -n app-b -o jsonpath='{.data.connstring}'
 
 region-a operator is PAUSED, so killed pods are NOT rescheduled (real outage).
   Absorbed loss (NO switch): kill ONE node, e.g.
@@ -157,8 +159,10 @@ done
 
 echo "== deploy mock app and active observer =="
 kubectl apply -k "$ROOT/deploy/kind/mock-app"
+kubectl apply -k "$ROOT/deploy/kind/mock-app-b"
 kubectl apply -k "$ROOT/deploy/kind/observer"
 kubectl rollout status deployment/mock-app --timeout=2m
+kubectl rollout status deployment/mock-app-b --namespace app-b --timeout=2m
 kubectl rollout status deployment/observer --timeout=2m
 
 BASELINE="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
@@ -167,6 +171,13 @@ BASELINE="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
   exit 1
 }
 echo "baseline OK: cb-conn=$BASELINE"
+
+BASELINE_B="$(kubectl get configmap cb-conn --namespace app-b -o jsonpath='{.data.connstring}')"
+[[ "$BASELINE_B" == "couchbase://region-a-srv.region-a.svc" ]] || {
+  echo "FAIL: unexpected app-b baseline connstring: $BASELINE_B"
+  exit 1
+}
+echo "baseline OK (app-b): cb-conn=$BASELINE_B"
 
 # Pause the operator so deleted pods are NOT rescheduled; the surviving Couchbase
 # nodes are what react (auto-failover, then full outage), exactly as in production.
@@ -196,6 +207,12 @@ for _ in $(seq 1 22); do
   CUR="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
   [[ "$CUR" == "couchbase://region-a-srv.region-a.svc" ]] || {
     echo "FAIL: observer switched on an absorbed single-node loss (cb-conn=$CUR)"
+    kubectl logs deployment/observer --tail=100 || true
+    exit 1
+  }
+  CUR_B="$(kubectl get configmap cb-conn --namespace app-b -o jsonpath='{.data.connstring}')"
+  [[ "$CUR_B" == "couchbase://region-a-srv.region-a.svc" ]] || {
+    echo "FAIL: observer switched app-b on an absorbed single-node loss (cb-conn=$CUR_B)"
     kubectl logs deployment/observer --tail=100 || true
     exit 1
   }
@@ -235,6 +252,31 @@ done
   kubectl logs deployment/observer --tail=100 || true
   exit 1
 }
+
+echo "== assert the switch fanned out to app-b =="
+NEW_B=""
+for _ in $(seq 1 30); do
+  NEW_B="$(kubectl get configmap cb-conn --namespace app-b -o jsonpath='{.data.connstring}')"
+  [[ "$NEW_B" == "couchbase://region-b-srv.region-b.svc" ]] && break
+  sleep 2
+done
+[[ "$NEW_B" == "couchbase://region-b-srv.region-b.svc" ]] || {
+  echo "FAIL: app-b configmap not switched (cb-conn=$NEW_B)"
+  kubectl logs deployment/observer --tail=100 || true
+  exit 1
+}
+
+kubectl rollout status deployment/mock-app-b --namespace app-b --timeout=2m
+kubectl get deployment mock-app-b --namespace app-b \
+  -o jsonpath='{.spec.template.metadata.annotations.observer/switched-to}' \
+  | grep -q 'couchbase://region-b-srv.region-b.svc'
+APP_B_LOGS="$(kubectl logs -l app=mock-app-b --namespace app-b --tail=20)"
+grep -q 'connstring=couchbase://region-b-srv.region-b.svc' <<<"$APP_B_LOGS" || {
+  echo "FAIL: mock-app-b log does not show the switched connstring"
+  echo "$APP_B_LOGS"
+  exit 1
+}
+echo "PASS: switch fanned out to app-b and rolled mock-app-b"
 
 echo "== verify controlled redeploy picked up region-b =="
 kubectl rollout status deployment/mock-app --timeout=2m
@@ -313,6 +355,7 @@ CONN_BEFORE="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
   exit 1
 }
 ROLL_BEFORE="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+ROLL_B_BEFORE="$(kubectl get deployment mock-app-b --namespace app-b -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
 
 echo "stopping observer (simulate a crash after the switch already happened)"
 kubectl scale deployment/observer --replicas=0
@@ -337,6 +380,8 @@ for _ in $(seq 1 22); do
 done
 ROLL_AFTER="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
 [[ "$ROLL_AFTER" == "$ROLL_BEFORE" ]] || { echo "FAIL: mock-app rolled again on adopt (want no roll)"; exit 1; }
+ROLL_B_AFTER="$(kubectl get deployment mock-app-b --namespace app-b -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+[[ "$ROLL_B_AFTER" == "$ROLL_B_BEFORE" ]] || { echo "FAIL: mock-app-b rolled again on adopt (want no roll)"; exit 1; }
 # Retry the log check: the adopt line is emitted once at startup, but a lone
 # `kubectl logs` right after a pod restart can transiently miss it, so poll like
 # every other assertion here rather than one-shot.
