@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-receiver
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhook-receiver
+  template:
+    metadata:
+      labels:
+        app: webhook-receiver
+    spec:
+      containers:
+        - name: receiver
+          # This pulls python:3.12-alpine, which is small and pulled once per
+          # kind cluster; it is NOT the busybox:1.36 image mock-app already
+          # uses, so this is one extra pull per cluster.
+          image: python:3.12-alpine
+          # A tiny HTTP server that prints every request (method, path,
+          # headers, body) to stdout unbuffered before answering 204, so
+          # `kubectl logs` is the assertion surface. python3 -u plus
+          # flush=True is what guarantees kubectl logs sees each request
+          # immediately.
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              from http.server import BaseHTTPRequestHandler, HTTPServer
+              class H(BaseHTTPRequestHandler):
+                  def do_POST(self):
+                      n = int(self.headers.get('Content-Length', 0))
+                      body = self.rfile.read(n).decode()
+                      print("REQ %s %s" % (self.command, self.path), flush=True)
+                      for k, v in self.headers.items():
+                          print("HDR %s: %s" % (k, v), flush=True)
+                      print("BODY %s" % body, flush=True)
+                      self.send_response(204)
+                      self.end_headers()
+                  def log_message(self, *a):
+                      pass
+              HTTPServer(("", 8080), H).serve_forever()
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-receiver
+  namespace: default
+spec:
+  selector:
+    app: webhook-receiver
+  ports:
+    - port: 8080
+      targetPort: 8080
