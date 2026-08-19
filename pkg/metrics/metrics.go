@@ -30,6 +30,12 @@ func counter(name, help string) prometheus.Counter {
 	return c
 }
 
+func counterVec(name, help string, labels ...string) *prometheus.CounterVec {
+	c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: help}, labels)
+	reg.MustRegister(c)
+	return c
+}
+
 var (
 	LoopLastTick = gauge("observer_loop_last_tick_timestamp_seconds",
 		"Unix time of the last active-loop iteration (heartbeat age source).")
@@ -49,6 +55,10 @@ var (
 		"Unix time of the last successful actuation.")
 	SecondaryUp = gauge("observer_secondary_up",
 		"Secondary region readiness at last check (1=UP, 0=not; switch is held when 0).")
+	WebhookTotal = counterVec("observer_webhook_total",
+		"Webhook deliveries by outcome (ok = 2xx, error = exhausted retries).", "result")
+	WebhookLastSuccess = gauge("observer_webhook_last_success_timestamp_seconds",
+		"Unix time of the last successful webhook delivery.")
 )
 
 // Handler serves the observer's metrics registry.
