@@ -30,7 +30,6 @@ resource "kubernetes_deployment" "observer" {
           name  = "observer"
           image = var.observer_image
           args = [
-            "--mode=observe",
             "--conn=couchbase://region-a-srv.region-a.svc",
             "--bucket=observer",
             "--user=${var.cb_username}",

@@ -63,18 +63,38 @@ Trade-off: no RBAC change per new namespace, but the observer then holds `get/up
 every ConfigMap and Deployment in the cluster.
 
 ## Flags
-`--mode active`, `--conn`, `--secondary-conn`, `--bucket`, `--user`, `--pass`,
+`--actuators` (comma list: `k8s`, `webhook`, or `k8s,webhook`; empty default = observe
+only), `--conn`, `--secondary-conn`, `--bucket`, `--user`, `--pass`,
 `--critical` (comma list, e.g. `kv`), `--interval`, `--failover-delay` (set above the
 cluster auto-failover timeout so absorbed single-node losses do not trigger a switch),
 `--namespace` (default namespace for unqualified entries), `--configmap` (comma list,
 `ns/name` or bare name), `--config-key` (global, all ConfigMaps), `--deployments` (comma
 list, `ns/name` or bare name), `--dry-run`.
 
+`--mode` (`observe` / `active`) is **DEPRECATED** and goes away next release; it logs a
+WARN. `--mode=active` becomes `--actuators=k8s`, `--mode=observe` becomes no flag.
+
+The Kubernetes targets above (`--namespace`, `--configmap`, `--config-key`,
+`--deployments`) and the RBAC they need apply to the `k8s` actuator only. A
+webhook-only observer reads no ConfigMap and needs no ServiceAccount permissions.
+
+Webhook actuator: `--webhook-url` (required with `webhook`), `--webhook-user`,
+`--webhook-pass`, `--webhook-header` (`"Key: Value"`, repeatable), `--webhook-timeout`
+(default `3s`), `--webhook-retries` (default `2`), `--webhook-ca-cert`,
+`--webhook-skip-verify`. Keep the credentials in a Secret and pass them as the
+`WEBHOOK_USER`, `WEBHOOK_PASS` and `WEBHOOK_HEADER` (one `Key: Value` per line)
+environment variables instead of Deployment args.
+
+Budget the webhook against the liveness window: a switching tick runs both probes and
+the delivery, so keep `2*probe-timeout + (retries+1)*webhook-timeout + backoff` under
+`3*interval` or the observer warns `webhook_window_tight` and risks a restart mid-outage.
+
 ## Observability
 `GET /metrics` (Prometheus). Key series: `observer_loop_last_tick_timestamp_seconds`,
 `observer_couchbase_up{region}`, `observer_service_up{service}`,
 `observer_sustained_down_seconds`, `observer_active_region{region}`,
-`observer_failover_total`, `observer_failover_errors_total`, `observer_secondary_up`.
+`observer_failover_total`, `observer_failover_errors_total`, `observer_secondary_up`,
+`observer_webhook_total{result}`, `observer_webhook_last_success_timestamp_seconds`.
 Alerts in `deploy/k8s/observer-alerts.yaml`.
 
 Note: `observer_secondary_up` is set only when a switch is pending (sustained outage),

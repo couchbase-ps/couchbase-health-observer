@@ -19,7 +19,7 @@ spec:
           image: couchbase-health-observer:dev
           imagePullPolicy: Never
           args:
-            - --mode=active
+            - --actuators=k8s
             - --log-level=debug
             - --conn=couchbase://region-a-srv.region-a.svc
             - --bucket=observer

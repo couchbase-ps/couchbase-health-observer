@@ -125,7 +125,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--mode` | `observe` | `observe` or `active` |
+| `--actuators` | (empty) | what to do on a switch: `k8s`, `webhook`, or `k8s,webhook`; empty = observe only |
+| `--mode` | (empty) | **DEPRECATED** (removed next release): `observe` / `active`; use `--actuators` instead |
 | `--conn` | `couchbase://localhost` | connection string of the primary |
 | `--bucket` | `travel-sample` | bucket used for the KV ping |
 | `--user` / `--pass` | `Administrator` / `password` | cluster admin credentials |
@@ -135,18 +136,39 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 | `--addr` | `:8080` | HTTP listen address |
 | `--interval` | `5s` | active-mode poll interval |
 | `--failover-delay` | `150s` | sustained DOWN before switching; set above the cluster auto-failover timeout |
-| `--secondary-conn` | (empty) | connection string to switch to (active mode) |
-| `--namespace` | `default` | default namespace for unqualified `--configmap`/`--deployments` entries (active mode) |
-| `--configmap` | `cb-conn` | comma list of connstring ConfigMaps, each `ns/name` or a bare name (active mode) |
-| `--config-key` | `connstring` | key inside that ConfigMap (active mode) |
-| `--deployments` | (empty) | comma list of Deployments to roll on switch, each `ns/name` or a bare name (active mode) |
-| `--dry-run` | `false` | active mode: log the switch but make no changes |
+| `--secondary-conn` | (empty) | connection string to switch to (every actuator needs it) |
+| `--namespace` | `default` | default namespace for unqualified `--configmap`/`--deployments` entries (`k8s` actuator) |
+| `--configmap` | `cb-conn` | comma list of connstring ConfigMaps, each `ns/name` or a bare name (`k8s` actuator) |
+| `--config-key` | `connstring` | key inside that ConfigMap (`k8s` actuator) |
+| `--deployments` | (empty) | comma list of Deployments to roll on switch, each `ns/name` or a bare name (`k8s` actuator) |
+| `--dry-run` | `false` | log the switch but make no changes (every actuator) |
+| `--webhook-url` | (empty) | switch webhook endpoint; required when `--actuators` includes `webhook` |
+| `--webhook-user` | (empty) | webhook basic-auth user (or env `WEBHOOK_USER`) |
+| `--webhook-pass` | (empty) | webhook basic-auth password (or env `WEBHOOK_PASS`) |
+| `--webhook-header` | (empty) | extra request header `"Key: Value"`; repeatable (or env `WEBHOOK_HEADER`, one per line) |
+| `--webhook-timeout` | `3s` | per-attempt webhook timeout; keep `2*probe-timeout + (retries+1)*timeout + backoff` under `3*interval` |
+| `--webhook-retries` | `2` | extra webhook attempts after the first |
+| `--webhook-ca-cert` | (empty) | PEM CA cert to trust for the webhook TLS connection |
+| `--webhook-skip-verify` | `false` | skip webhook TLS server-cert verification (insecure); wins over `--webhook-ca-cert` |
+
+`--actuators` names the actions taken when a switch is due: `k8s` patches the
+connstring ConfigMaps and rolls the Deployments, `webhook` POSTs the switch request
+to `--webhook-url`, and `k8s,webhook` does both. The switch latch follows whatever
+actuator can actually move the applications: with `k8s` enabled the latch follows
+the Kubernetes result alone (a failed webhook POST is logged as an error but does
+not block it), and with `webhook` as the only actuator the latch follows the
+webhook result, so a dropped POST still retries next tick. Empty (the default)
+observes only.
+
+Keep webhook credentials out of the command line: pass them through the
+`WEBHOOK_USER`, `WEBHOOK_PASS` and `WEBHOOK_HEADER` environment variables, sourced
+from a Secret (see `deploy/k8s/README.md`).
 
 One observer can drive several namespaces in one switch. Qualified and unqualified
 entries mix freely, so an existing single-namespace config keeps working:
 
 ```bash
-go run ./cmd/svchealthcheck --mode active \
+go run ./cmd/svchealthcheck --actuators k8s \
   --namespace default \
   --configmap cb-conn,payments/cb-conn,orders/cb-conn \
   --deployments mock-app,payments/api,payments/worker,orders/web \
@@ -159,7 +181,7 @@ skips only that namespace's Deployments, and retries on its next tick.
 
 Set `GOCB_VERBOSE=1` to enable verbose gocb logging.
 
-In active mode the Kubernetes client uses `KUBECONFIG` if set (local / kind), otherwise
+With the `k8s` actuator the Kubernetes client uses `KUBECONFIG` if set (local / kind), otherwise
 in-cluster config. The observer ServiceAccount needs `get`/`update` on `configmaps` and
 `deployments` in every target namespace. `deploy/kind/observer/rbac.yaml` ships a
 `ClusterRole` plus one `RoleBinding` per target namespace; see `docs/DEPLOYMENT.md` for the
