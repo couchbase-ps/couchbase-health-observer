@@ -398,3 +398,121 @@ done
   exit 1
 }
 echo "PASS: cold-start adopt, no re-switch, no app roll"
+
+# Scenario E: a webhook-only observer (--actuators=webhook) must POST the switch
+# request and must NOT touch any cb-conn or roll any app. region-a is still DOWN
+# from the earlier scenarios, and both ConfigMaps are on region-b, so rewind BOTH
+# to primary to recreate a pending switch that only the webhook may act on.
+echo "== scenario E: webhook-only observer, expect POST and NO configmap patch =="
+kubectl apply -k "$ROOT/deploy/kind/webhook-receiver"
+kubectl rollout status deployment/webhook-receiver --timeout=2m
+
+kubectl patch configmap cb-conn --type=merge -p '{"data":{"connstring":"couchbase://region-a-srv.region-a.svc"}}'
+kubectl patch configmap cb-conn --namespace app-b --type=merge -p '{"data":{"connstring":"couchbase://region-a-srv.region-a.svc"}}'
+ROLL_BEFORE_E="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+ROLL_B_BEFORE_E="$(kubectl get deployment mock-app-b --namespace app-b -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+
+echo "restarting the observer in webhook-only mode"
+kubectl scale deployment/observer --replicas=0
+kubectl wait --for=delete pod -l app=observer --timeout=60s
+# The observer Deployment runs --interval=2s, so the liveness window (3x interval)
+# is 6s. The guard now warns on the COMBINED probe + webhook budget: 2*probe-timeout
+# + (retries+1)*webhook-timeout + backoff. The webhook defaults (3s timeout, 2
+# retries) allow a worst case of 12s total against that 6s window, which would
+# starve the observer's liveness heartbeat and let kubelet restart the pod
+# mid-scenario. 1s timeout + 1 retry keeps the webhook's own worst case at about
+# 3s (two 1s attempts plus 1s backoff), but combined with the 2*2s=4s probe
+# budget that is 7s against the 6s window, so this scenario emits a
+# webhook_window_tight WARN. That WARN is expected and harmless here: the
+# secondary probe returns fast and the receiver answers immediately, so the
+# real tick stays well under the window. Do not "simplify" this back to the
+# plan's defaults.
+# Args index 0 is the actuator selector (see deploy/kind/observer/deployment.yaml),
+# so replacing it swaps the whole actuator set in one op.
+kubectl patch deployment observer --type=json -p '[
+  {"op":"replace","path":"/spec/template/spec/containers/0/args/0","value":"--actuators=webhook"},
+  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--webhook-url=http://webhook-receiver:8080/hook"},
+  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--webhook-header=X-Source: observer"},
+  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--webhook-timeout=1s"},
+  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--webhook-retries=1"}
+]'
+kubectl scale deployment/observer --replicas=1
+until kubectl get pod -l app=observer -o name 2>/dev/null | grep -q .; do sleep 1; done
+kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
+
+echo "== wait for the webhook delivery =="
+DELIVERED=0
+for _ in $(seq 1 60); do
+  if kubectl logs deployment/webhook-receiver 2>/dev/null | grep -q '"event":"switch_required"'; then
+    DELIVERED=1; break
+  fi
+  sleep 2
+done
+[[ "$DELIVERED" == "1" ]] || {
+  echo "FAIL: webhook receiver never saw the switch request"
+  kubectl logs deployment/webhook-receiver --tail=100 || true
+  kubectl logs deployment/observer --tail=200 || true
+  exit 1
+}
+
+echo "== assert the payload targets region-b and carries the custom header =="
+# The receiver is a small unbuffered Python HTTP server (see
+# deploy/kind/webhook-receiver/deployment.yaml): it prints "HDR <name>: <value>"
+# for every request header and "BODY <json>" for the decoded body before it
+# answers 204, so both lines are already complete by the time they hit stdout.
+# Do NOT expect a second POST to fix a miss here: once a delivery succeeds the
+# state machine latches and the observer stops posting (it re-POSTs only while
+# delivery FAILS). The polling here just absorbs the lag between the receiver
+# writing to stdout and `kubectl logs` returning it.
+PAYLOAD_OK=0
+for _ in $(seq 1 30); do
+  RECEIVED="$(kubectl logs deployment/webhook-receiver 2>/dev/null || true)"
+  BODY_LINE="$(grep '^BODY ' <<<"$RECEIVED" | tail -1)"
+  # This observer runs --actuators=webhook, but the pre-existing
+  # --configmap=cb-conn,app-b/cb-conn and --deployments=mock-app,app-b/mock-app-b
+  # args are still on the Deployment (see the patch above), so this is exactly the
+  # case that regresses if the payload construction ever stops gating on the k8s
+  # actuator: configmaps/deployments must be absent even though non-empty values
+  # were passed on the command line. Check the BODY line, not the whole log, so a
+  # header echoing either word could not false-pass.
+  if grep -q 'HDR X-Source: observer' <<<"$RECEIVED" && grep -q 'couchbase://region-b-srv.region-b.svc' <<<"$RECEIVED" \
+      && ! grep -q '"configmaps"' <<<"$BODY_LINE" && ! grep -q '"deployments"' <<<"$BODY_LINE"; then
+    PAYLOAD_OK=1; break
+  fi
+  sleep 2
+done
+[[ "$PAYLOAD_OK" == "1" ]] || {
+  echo "FAIL: never saw a complete request (header + region-b payload) from the receiver, or the webhook-only payload leaked the Kubernetes configmaps/deployments fields"
+  kubectl logs deployment/webhook-receiver --tail=200 || true
+  kubectl logs deployment/observer --tail=200 || true
+  exit 1
+}
+
+echo "== assert the observer logged the call and left Kubernetes alone =="
+WEBHOOK_LOGGED=0
+for _ in $(seq 1 15); do
+  if kubectl logs deployment/observer 2>/dev/null | grep -q "Webhook called"; then
+    WEBHOOK_LOGGED=1; break
+  fi
+  sleep 2
+done
+[[ "$WEBHOOK_LOGGED" == "1" ]] || {
+  echo "FAIL: observer did not log webhook_called"
+  kubectl logs deployment/observer --tail=200 || true
+  exit 1
+}
+CONN_E="$(kubectl get configmap cb-conn -o jsonpath='{.data.connstring}')"
+[[ "$CONN_E" == "couchbase://region-a-srv.region-a.svc" ]] || {
+  echo "FAIL: webhook-only observer patched cb-conn (cb-conn=$CONN_E)"
+  exit 1
+}
+CONN_E_B="$(kubectl get configmap cb-conn --namespace app-b -o jsonpath='{.data.connstring}')"
+[[ "$CONN_E_B" == "couchbase://region-a-srv.region-a.svc" ]] || {
+  echo "FAIL: webhook-only observer patched the app-b cb-conn (cb-conn=$CONN_E_B)"
+  exit 1
+}
+ROLL_AFTER_E="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+[[ "$ROLL_AFTER_E" == "$ROLL_BEFORE_E" ]] || { echo "FAIL: webhook-only observer rolled mock-app"; exit 1; }
+ROLL_B_AFTER_E="$(kubectl get deployment mock-app-b --namespace app-b -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
+[[ "$ROLL_B_AFTER_E" == "$ROLL_B_BEFORE_E" ]] || { echo "FAIL: webhook-only observer rolled mock-app-b"; exit 1; }
+echo "PASS: webhook-only observer POSTed the switch and left Kubernetes untouched"
