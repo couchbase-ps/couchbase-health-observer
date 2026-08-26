@@ -26,7 +26,7 @@ Two actuators, picked by `--actuators` (`k8s`, `webhook`, `k8s,webhook`; empty =
 ## Layout
 
 ```text
-pkg/svchealth/        SDK per-service health detector (types, prober, Compute, HTTP handler)
+pkg/svchealth/        SDK per-service health detector (types, prober, active-cluster prober, Compute, HTTP handler)
 cmd/svchealthcheck/   server exposing /health/couchbase (+ --actuators wiring, runSwitch)
 pkg/notify/           switch webhook: Event payload, Notifier iface, HTTP notifier (auth/headers/retries/TLS)
 deploy/compose/       5-node Couchbase EE 8.0.1 harness for the compose detector stack
@@ -65,7 +65,7 @@ go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve
 test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
 ```
 
-`--log-level trace|debug|info|warn|error` (default `info`). Human-readable lines via a custom slog handler (`pkg/obslog` `NewHuman`): `HH:mm:ss.SSS LEVEL <component> <prose>` (components: observer/health/failover/actuator/cluster/probe/webhook). Events + levels + attrs unchanged, so a JSON handler is a later drop-in swap. INFO=state changes+switch actions; DEBUG=per-tick cluster detail; TRACE=per-endpoint ping. Events: `startup`, `active_config`, `adopt_switched`, `adopt_mixed`, `target_namespace_unpaired`, `liveness_window_tight`, `probe`, `health`, `cluster_detail`, `cluster_nodes`, `cluster_map[_change]`, `failover_countdown_start`, `switch_required/held/skipped`, `secondary_connect_failed`, `configmap_patch`, `deployment_roll`, `roll_only`, `roll_skipped`, `switched`, `switch_noop`, `actuation_error`, `webhook_target`, `webhook_called`, `webhook_retry`, `webhook_failed`, `webhook_dropped`, `webhook_dry_run`, `webhook_body`, `webhook_insecure`, `webhook_window_tight`, `mode_deprecated`.
+`--log-level trace|debug|info|warn|error` (default `info`). Human-readable lines via a custom slog handler (`pkg/obslog` `NewHuman`): `HH:mm:ss.SSS LEVEL <component> <prose>` (components: observer/health/failover/actuator/cluster/probe/webhook). Events + levels + attrs unchanged, so a JSON handler is a later drop-in swap. INFO=state changes+switch actions; DEBUG=per-tick cluster detail; TRACE=per-endpoint ping. Events: `startup`, `active_config`, `adopt_switched`, `adopt_mixed`, `target_namespace_unpaired`, `liveness_window_tight`, `probe`, `health`, `cluster_detail`, `cluster_nodes`, `cluster_map[_change]`, `failover_countdown_start`, `switch_required/held/skipped`, `secondary_connect_failed`, `probe_target`, `probe_target_held`, `probe_target_unavailable`, `configmap_patch`, `deployment_roll`, `roll_only`, `roll_skipped`, `switched`, `switch_noop`, `actuation_error`, `webhook_target`, `webhook_called`, `webhook_retry`, `webhook_failed`, `webhook_dropped`, `webhook_dry_run`, `webhook_body`, `webhook_insecure`, `webhook_window_tight`, `mode_deprecated`.
 
 `--actuators=k8s,webhook` (empty = observe only) replaces `--mode`; `--mode` deprecated one release.
 Webhook flags: `--webhook-url --webhook-user --webhook-pass --webhook-header (repeatable) --webhook-timeout --webhook-retries --webhook-ca-cert --webhook-skip-verify`. Creds also via `WEBHOOK_USER`/`WEBHOOK_PASS`/`WEBHOOK_HEADER`.

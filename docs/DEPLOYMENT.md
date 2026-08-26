@@ -97,6 +97,13 @@ the delivery, so keep `2*probe-timeout + (retries+1)*webhook-timeout + backoff` 
 `observer_webhook_total{result}`, `observer_webhook_last_success_timestamp_seconds`.
 Alerts in `deploy/k8s/observer-alerts.yaml`.
 
+Note: `observer_couchbase_up{region}` reports the ACTIVE cluster only: `--conn` until a
+switch, `--secondary-conn` after one (or after an already-switched state adopted at boot).
+The abandoned cluster's series is dropped on the switch, so it cannot sit at `0` forever
+and alert about a cluster nobody probes; `observer_active_region{region}` is what reports
+the switch itself. A `--dry-run` switch patches nothing, so health stays on the primary
+and logs `probe_target_held`.
+
 Note: `observer_secondary_up` is set only when a switch is pending (sustained outage),
 so it reads `0` until the first switch attempt — read it alongside `observer_couchbase_up`
 (the `ObserverSwitchHeldSecondaryDown` alert already gates on both).

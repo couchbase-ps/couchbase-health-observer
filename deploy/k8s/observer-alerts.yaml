@@ -39,8 +39,8 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Primary Couchbase DOWN for 3m"
-            description: "A region switch should have fired; check observer_failover_total."
+            summary: "Active Couchbase cluster DOWN for 3m"
+            description: "observer_couchbase_up names the ACTIVE cluster (primary until a switch, secondary after one); the series for an abandoned cluster is dropped. A region switch should have fired; check observer_failover_total."
         - alert: ObserverActuationErrors
           expr: increase(observer_failover_errors_total[5m]) > 0
           labels:

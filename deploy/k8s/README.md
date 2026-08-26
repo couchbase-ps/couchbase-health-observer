@@ -14,6 +14,11 @@ on a sustained primary outage.
 | readiness | `/readyz` | K8s API unreachable / not yet evaluated | pod marked NOT READY (no restart) |
 | (DB health) | `/health/couchbase` | Couchbase unreachable | consumed by the AWS ALB path only |
 
+`/health/couchbase` always describes the ACTIVE cluster: `--conn` until a switch,
+`--secondary-conn` after one (a switch this observer performed, or an
+already-switched state adopted at boot). Failback is manual, so it never swaps
+back on its own.
+
 **Never** point liveness/readiness at `/health/couchbase` — a DB outage would restart
 the observer exactly when it must act. See `docs/DEPLOYMENT.md`.
 
