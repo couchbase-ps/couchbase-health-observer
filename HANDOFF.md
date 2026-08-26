@@ -2,6 +2,44 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## Health follows ACTIVE cluster after switch (2026-08-26, #38)
+
+Regression fix, rebased on webhook #31 + multi-ns #32. Post-switch/post-adopt
+loop kept probing `--conn` (primary) while every line labeled `secondary`: role
+label moved, prober did not. Field log: `secondary: 1/2 nodes reachable` listing
+PRIMARY IPs.
+
+`pkg/svchealth.ActiveProber` = atomic swap (`NewActiveProber`/`Set`/`Probe`),
+holds active cluster. `cmd/svchealthcheck` wires it into BOTH loop and
+`/health/couchbase`, so one `Set` moves both. ONE swap fn `followSecondary()`
+moves role + disp + `activeRegion` (`couchbase_up` label) + prober + `lastHosts`
+baseline together (stale baseline -> next tick reports every primary node as
+having left the SECONDARY map: same symptom again). Swap points = the 2 places
+main already flipped the label: boot adopt (`adopt_switched`) and latching
+`runSwitch` (k8s switch, k8s already-there no-op, or webhook-only delivery).
+Real switch also DROPS old region `couchbase_up` series (`DeleteLabelValues`),
+else it pins 0 forever + `CouchbaseSustainedDown` fires about unprobed cluster
+(`observer_active_region` reports the switch).
+
+Deliberate non-swaps: `--dry-run` patched nothing -> apps still read primary ->
+health STAYS primary, INFO `probe_target_held` (dry-run is the one path where
+"switched" is narrated but nothing moved). `adopt_mixed` (partial ns fan-out) ->
+switch still pending -> primary is the cluster to evaluate. Adopt with no
+connectable secondary -> WARN `probe_target_unavailable`, keep honest `primary`.
+Observe-only (`--actuators=`) never adopts (no k8sClient, no ConfigMap read):
+KNOWN GAP, no issue yet; AWS quorum fleet runs that mode. Webhook-only latches
+on delivery, not on the receiver finishing, and has no state to read back at
+boot: pre-existing #31 limitation, unchanged here.
+
+`/health/couchbase` now reports ACTIVE cluster after switch (before: stuck DOWN
+on abandoned primary for process life). Failback still manual: nothing swaps
+back. New events `probe_target`, `probe_target_held`,
+`probe_target_unavailable` (golden rows in `TestHumanCatalog`). Docs: AGENTS.md
+event list + layout, `deploy/k8s/README.md` endpoint note, `docs/DEPLOYMENT.md`
+metric note, alert summary retitled "Active Couchbase cluster DOWN". Tests:
+`pkg/svchealth/active_test.go` (swap + err + `-race` concurrent), kind e2e
+scenarios B + D assert "Health probes now follow secondary" + `secondary UP`.
+
 ## Switch webhook + --actuators (2026-08-19, #31; rebased on multi-ns #32)
 
 Observer can POST switch to external endpoint instead of / beside K8s switch.

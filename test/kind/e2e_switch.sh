@@ -298,6 +298,25 @@ for ev in "SWITCHED " "Patching ConfigMap " "Rolling deployment "; do
 done
 echo "PASS: switch emitted switched + configmap_patch + deployment_roll"
 
+# After the switch the secondary is the active cluster, so the observer must
+# probe it -- not keep reporting the dead primary under the secondary's name
+# (regression: the role label moved, the prober did not).
+HEALTH_FOLLOWED=0
+for _ in $(seq 1 15); do
+  OBS_LOGS="$(kubectl logs deployment/observer --tail=500 2>/dev/null || true)"
+  if grep -q "Health probes now follow secondary" <<<"$OBS_LOGS" \
+     && grep -q "secondary UP" <<<"$OBS_LOGS"; then
+    HEALTH_FOLLOWED=1; break
+  fi
+  sleep 2
+done
+[[ "$HEALTH_FOLLOWED" == "1" ]] || {
+  echo "FAIL: after the switch the observer did not follow the secondary (want 'Health probes now follow secondary' + 'secondary UP')"
+  kubectl logs deployment/observer --tail=60 || true
+  exit 1
+}
+echo "PASS: health probes follow the secondary after the switch"
+
 # Scenario C: the observer restarts (cold start) into a region-a that is ALREADY
 # DOWN while cb-conn still points at primary -- as if the previous instance died
 # before it could react to the outage. region-a is already gone from scenario B
@@ -397,7 +416,23 @@ done
   kubectl logs deployment/observer --tail=100 || true
   exit 1
 }
-echo "PASS: cold-start adopt, no re-switch, no app roll"
+# The adopted state means the secondary is active: the observer must probe
+# region-b (UP) instead of the dead region-a while calling it "secondary".
+ADOPT_FOLLOWED=0
+for _ in $(seq 1 15); do
+  OBS_LOGS="$(kubectl logs deployment/observer --tail=500 2>/dev/null || true)"
+  if grep -q "Health probes now follow secondary" <<<"$OBS_LOGS" \
+     && grep -q "secondary UP" <<<"$OBS_LOGS"; then
+    ADOPT_FOLLOWED=1; break
+  fi
+  sleep 2
+done
+[[ "$ADOPT_FOLLOWED" == "1" ]] || {
+  echo "FAIL: adopted observer still probes the primary (want 'Health probes now follow secondary' + 'secondary UP')"
+  kubectl logs deployment/observer --tail=60 || true
+  exit 1
+}
+echo "PASS: cold-start adopt, no re-switch, no app roll, probes follow the secondary"
 
 # Scenario E: a webhook-only observer (--actuators=webhook) must POST the switch
 # request and must NOT touch any cb-conn or roll any app. region-a is still DOWN

@@ -159,6 +159,14 @@ func renderEvent(event string, f map[string]slog.Value) (component, message stri
 		return "observer", fmt.Sprintf("Liveness window tight: 2x probe-timeout %s >= 3x interval %s", at("twice_probe_timeout"), at("window"))
 	case "secondary_connect_failed":
 		return "observer", fmt.Sprintf("Secondary connect failed (treated as DOWN): %s", at("err"))
+	case "probe_target":
+		return "observer", fmt.Sprintf("Health probes now follow %s", at("target"))
+	case "probe_target_held":
+		return "observer", fmt.Sprintf("Health probes stay on %s - %s moved nothing, so the apps still read it",
+			at("using"), at("reason"))
+	case "probe_target_unavailable":
+		return "observer", fmt.Sprintf("Cannot probe %s; health probes stay on %s - reported health is NOT the active cluster",
+			at("want"), at("using"))
 
 	case "health":
 		region := at("active_region")

@@ -150,6 +150,10 @@ func main() {
 	_ = b.WaitUntilReady(5*time.Second, nil)
 
 	prober := &svchealth.GocbProber{Cluster: cluster, Bucket: b, Timeout: *probeTimeout}
+	// Everything that reports health reads through activeProber: the primary
+	// until a region switch, the secondary after one. Swapping it in one place
+	// keeps the loop, the metrics and /health/couchbase on the same cluster.
+	activeProber := svchealth.NewActiveProber(prober)
 	crit := strings.Split(*critical, ",")
 
 	// Heartbeat is only meaningful when the poll loop runs (there is a loop to
@@ -170,7 +174,7 @@ func main() {
 
 	// /health/couchbase always served (probes fresh per request).
 	mux := http.NewServeMux()
-	mux.Handle("/health/couchbase", &svchealth.Handler{Prober: prober, Critical: crit})
+	mux.Handle("/health/couchbase", &svchealth.Handler{Prober: activeProber, Critical: crit})
 	// Liveness fails ONLY when the active loop stalls (>3x interval). NEVER point
 	// this at /health/couchbase: a real DB outage would then restart the observer
 	// exactly when it must act.
@@ -285,14 +289,32 @@ func main() {
 		}
 	}
 
-	activeRole := "primary"
-	activeDisp := primaryDisp
-	if alreadySwitched {
-		activeRole = "secondary"
-		activeDisp = secondaryDisp
-	}
+	activeRole, activeDisp, activeRegion := "primary", primaryDisp, primaryRegion
 	lastStatus := ""                  // forces INFO on the first tick
 	var lastHosts map[string]struct{} // nil until the first round is seen
+
+	// followSecondary moves EVERYTHING that names or reads a cluster in one go:
+	// the role label, the display name, the couchbase_up label, the probe target
+	// and the cluster-map baseline. Keeping it in one place is the point: a label
+	// that moved without its prober is exactly the bug this fixes. The baseline
+	// must be dropped too, or the next tick diffs the secondary's hosts against
+	// the primary's and reports every primary node as having left the secondary.
+	followSecondary := func() {
+		activeRole, activeDisp, activeRegion = "secondary", secondaryDisp, secondaryRegion
+		activeProber.Set(secondaryProber)
+		lastHosts = nil
+		logger.Info("probe_target", "target", secondaryDisp)
+	}
+	// An adopted already-switched state means the secondary is active, so probe
+	// it: staying on the primary would report a dead cluster under the
+	// secondary's name and never see the cluster the apps actually use.
+	if alreadySwitched {
+		if secondaryProber == nil {
+			logger.Warn("probe_target_unavailable", "want", secondaryDisp, "using", primaryDisp)
+		} else {
+			followSecondary()
+		}
+	}
 
 	// Like act, the notifier stays a nil interface when the webhook actuator is
 	// off, which is how runSwitch knows to skip that path.
@@ -320,7 +342,7 @@ func main() {
 	defer ticker.Stop()
 	for range ticker.C {
 		hb.Tick()
-		probeSet, _ := prober.Probe(ctx)
+		probeSet, _ := activeProber.Probe(ctx)
 		now := time.Now().UTC()
 		rep := svchealth.Compute(probeSet, crit, now.Format(time.RFC3339))
 		firstEval.Store(true)
@@ -331,7 +353,7 @@ func main() {
 		if rep.Status != "DOWN" {
 			up = 1.0
 		}
-		metrics.CouchbaseUp.WithLabelValues(primaryRegion).Set(up)
+		metrics.CouchbaseUp.WithLabelValues(activeRegion).Set(up)
 		for svc, sh := range rep.Services {
 			s := 0.0
 			if sh.Status == "UP" {
@@ -415,7 +437,19 @@ func main() {
 				machine.MarkSwitched()
 				metrics.ActiveRegion.WithLabelValues(primaryRegion).Set(0)
 				metrics.ActiveRegion.WithLabelValues(secondaryRegion).Set(1)
-				activeRole, activeDisp = "secondary", secondaryDisp
+				if *dryRun {
+					// A dry run patched nothing, so the apps still read the primary.
+					// Health must describe the cluster they use, not the one this
+					// tick only pretended to move to.
+					logger.Info("probe_target_held", "reason", "dry_run", "using", primaryDisp)
+				} else {
+					// The primary is not probed any more, so leaving its couchbase_up
+					// series behind would pin it at 0 forever and keep
+					// CouchbaseSustainedDown firing about a cluster nobody watches.
+					// observer_active_region is what reports the switch itself.
+					metrics.CouchbaseUp.DeleteLabelValues(primaryRegion)
+					followSecondary()
+				}
 			}
 		}
 	}
