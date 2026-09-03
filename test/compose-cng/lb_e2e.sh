@@ -427,6 +427,12 @@ scenario_8() {
   # negative-and-positive pair: verification ON must switch cleanly, and
   # verification against the WRONG CA must fail, proving the chain is really
   # being checked rather than quietly skipped.
+  #
+  # This scenario does not itself verify region-a is reachable right before
+  # the negative-control run below: it relies on scenario_10's trailing
+  # recover_region_a (Observer UP, Envoy healthy) having just run with no
+  # disruptive step in between. If the scenario order ever changes, add that
+  # check here explicitly rather than assuming it still holds.
   echo "-- negative control: verify against a CA that did not sign the cert --"
   local bad; bad="$(mktemp -d)"
   openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
