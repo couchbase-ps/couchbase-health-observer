@@ -549,7 +549,7 @@ capture_cng_readiness() {
   fi
 
   echo "-- taking region-a's cluster down while leaving CNG running (image: $cng_image) --"
-  docker stop cb-a-data-1 cb-a-data-2 cb-a-data-3 >/dev/null
+  docker stop $REGION_A_NODES >/dev/null
   sleep 60
 
   after_obs="$(curl -s http://localhost:8181/health/couchbase | jq -r '.status // "NONE"')"
@@ -591,7 +591,12 @@ capture_cng_readiness() {
     printf "%-34s %-12s %-12s\n" "Observer /health/couchbase" "$before_obs" "$after_obs"
     printf "%-34s %-12s %-12s\n" "CNG :9191/health HTTP code" "$before_cng" "$after_cng"
     echo
-    if [ "$after_cng" = "200" ]; then
+    # The verdict is gated on BOTH readings, not on after_cng alone: after_obs
+    # is asserted separately above with assert_eq, but an assertion failure
+    # does not stop this file from being written, so without this gate a
+    # reader of the artifact alone could see a confident "FINDING HOLDS"
+    # sitting next to a table row that is not actually DOWN.
+    if [ "$after_obs" = "DOWN" ] && [ "$after_cng" = "200" ]; then
       echo "FINDING HOLDS for $cng_image: CNG's own health endpoint cannot"
       echo "report unhealthy. In couchbase/stellar-gateway, /ready and its"
       echo "alias /health read one boolean; MarkSystemHealthy() is called"
@@ -609,15 +614,27 @@ capture_cng_readiness() {
       echo "justification for Observer, and the basis for asking that CNG"
       echo "consume Observer health probes directly."
     else
-      echo "FINDING DOES NOT HOLD for $cng_image: CNG's /health returned"
-      echo "$after_cng, not 200, with the whole region-a cluster gone against"
-      echo "a verified healthy baseline (observer UP, CNG 200 before the"
-      echo "outage). The latch described above (MarkSystemUnhealthy has zero"
-      echo "callers) does not reproduce on this image. Treat the design"
-      echo "note's claim that /ready and /health never go unhealthy as VOID"
-      echo "for $cng_image: it needs correcting, not repeating, and the"
-      echo "stellar-gateway source for the tag matching this image should"
-      echo "be re-checked before restating the claim for any other version."
+      echo "NO VERDICT for $cng_image: the finding requires the Observer to"
+      echo "read DOWN and CNG to read 200 with the cluster gone; this run"
+      echo "saw observer=$after_obs cng=$after_cng."
+      if [ "$after_cng" != "200" ]; then
+        echo
+        echo "CNG's /health returned $after_cng, not 200, with the whole"
+        echo "region-a cluster gone against a verified healthy baseline"
+        echo "(observer UP, CNG 200 before the outage). The latch described"
+        echo "above (MarkSystemUnhealthy has zero callers) does not"
+        echo "reproduce on this image. Treat the design note's claim that"
+        echo "/ready and /health never go unhealthy as VOID for $cng_image:"
+        echo "it needs correcting, not repeating, and the stellar-gateway"
+        echo "source for the tag matching this image should be re-checked"
+        echo "before restating the claim for any other version."
+      fi
+      if [ "$after_obs" != "DOWN" ]; then
+        echo
+        echo "The Observer did not read DOWN either (got $after_obs), so"
+        echo "this run does not cleanly isolate CNG's behaviour from the"
+        echo "cluster's own state and should not be cited either way."
+      fi
     fi
   } > "$OUT_DIR/cng-readiness-latch.txt"
   echo "wrote $OUT_DIR/cng-readiness-latch.txt"
