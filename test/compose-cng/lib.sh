@@ -64,6 +64,21 @@ envoy_health() { # <cng ip> -> healthy | failed_active_hc | UNKNOWN
   esac
 }
 
+# wait_envoy_healthy <cng ip> [timeout_s] -> prints the health state reached.
+# "Observer UP" is NOT the same as "Envoy is routing here again": Envoy needs
+# healthy_threshold (2) x interval (5s) of successful checks before a recovered
+# host takes new connections. A scenario that starts inside that window silently
+# runs against the wrong region.
+wait_envoy_healthy() {
+  local ip="$1" secs="${2:-60}" i state
+  for i in $(seq 1 "$secs"); do
+    state="$(envoy_health "$ip")"
+    [ "$state" = "healthy" ] && { echo "healthy"; return 0; }
+    sleep 1
+  done
+  echo "$state"
+}
+
 # assert_marker <exec-container> <query-host> -> prints "a", "b", or MISSING.
 # exec-container is any node in that region curl can run inside (a data node
 # is always up); query-host is the node in that region actually running the
@@ -172,8 +187,21 @@ csv_regions() {
 # -1 when the run recorded no successful operation at all: that is not a
 # passing zero-length window, it is an undefined gap, and the caller must
 # treat -1 as a failed bound, same as before.
+#
+# A scenario 6 style deliberate idle gap is not an outage: the harness marks
+# it with an "idle" row ("epoch_ms,idle,ok,0,,sleeping Ns") before it sleeps.
+# That span is skipped by advancing the last-success marker to the end of the
+# sleep, so a deliberate idle period never shows up as a measured gap.
 csv_error_window_ms() {
   awk -F, '
+    NR>1 && $2=="idle" {
+      dur=$6
+      sub(/^sleeping /, "", dur)
+      sub(/s$/, "", dur)
+      idle_end=$1+dur*1000
+      if (prev=="" || idle_end>prev) prev=idle_end
+      next
+    }
     NR>1 && $2!="idle" {
       if (start=="") start=$1
       end=$1
@@ -287,4 +315,10 @@ recover_region_a() {
     membership="$(node_membership "$pools" "$n")"
     assert_eq "region-a $n active after recovery" "$membership" "active"
   done
+
+  # "Observer UP" above only means the cluster answers; it does not mean
+  # Envoy is routing new connections here again. Envoy needs
+  # healthy_threshold (2) x interval (5s) of passing checks first, so wait
+  # for that too before declaring region-a recovered.
+  assert_eq "region-a envoy healthy after recovery" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
 }
