@@ -20,5 +20,5 @@ deploy/aws/lambda/bootstrap
 *.zip
 .worktrees/
 
-# Locally generated test certificates, never commit the private keys
+# Locally generated test certificates, never commit private keys
 /deploy/compose-cng/certs/
