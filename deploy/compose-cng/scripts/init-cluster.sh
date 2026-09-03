@@ -159,17 +159,90 @@ run_query() {
   echo
 }
 
+# retry_until <description> <deadline seconds> <cmd...>: runs <cmd...>
+# repeatedly with exponential backoff (2s, capped at 15s) until it succeeds or
+# the deadline passes. Used under set -e, so the caller checks the return
+# value with "if ! retry_until ..." rather than letting a failure kill the
+# script outright.
+retry_until() {
+  local desc="$1" deadline_s="$2"; shift 2
+  local start deadline delay=2
+  start="$(date +%s)"; deadline=$((start + deadline_s))
+  until "$@" >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "retry_until: ${desc} did not succeed within ${deadline_s}s" >&2
+      return 1
+    fi
+    sleep "$delay"
+    if [ "$delay" -lt 15 ]; then delay=$((delay * 2)); fi
+  done
+}
+
+# wait_for_index_service: the query service can answer "SELECT 1" before the
+# index service on the same node is ready to serve DDL, which is exactly the
+# race that made "CREATE PRIMARY INDEX" return HTTP 500 on a freshly joined,
+# single-node region. This is a best-effort wait on the indexer's own admin
+# port (9102) on QUERY_HOST, which co-hosts the index service in every region
+# layout here (region-a's CB_QUERY_NODES run "index,query" together, and
+# region-b's single PRIMARY runs "data,index,query" together). It never blocks
+# forever: past its own deadline it logs a warning and falls through, because
+# the real safety net is the retry loop around CREATE PRIMARY INDEX below.
+wait_for_index_service() {
+  echo "Waiting for index service on ${QUERY_HOST}..."
+  local start deadline
+  start="$(date +%s)"; deadline=$((start + 120))
+  until curl -fsS -o /dev/null -u "${USERNAME}:${PASSWORD}" \
+      "http://${QUERY_HOST}:9102/api/v1/stats" 2>/dev/null; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "WARNING: index service on ${QUERY_HOST} did not answer within 120s, proceeding anyway" >&2
+      return 0
+    fi
+    sleep 3
+  done
+}
+
+verify_marker_readable() {
+  local out
+  out="$(run_query "SELECT RAW COUNT(*) FROM \`${BUCKET}\` USE KEYS \"region::marker\" WHERE region = \"${REGION}\"" 2>/dev/null || true)"
+  echo "$out" | grep -Eq '"results"[[:space:]]*:[[:space:]]*\[[[:space:]]*1[[:space:]]*\]'
+}
+
 create_index_and_marker() {
   echo "Waiting for query service..."
   until curl -fsS -o /dev/null -u "${USERNAME}:${PASSWORD}" "${QUERY_URL}" \
       --data-urlencode "statement=SELECT 1" >/dev/null 2>&1; do
     sleep 3
   done
-  # IF NOT EXISTS keeps re-runs idempotent.
-  run_query "CREATE PRIMARY INDEX IF NOT EXISTS ON \`${BUCKET}\`"
+
+  wait_for_index_service
+
+  # The index service can still be a few seconds behind even after the wait
+  # above answers, so CREATE PRIMARY INDEX gets its own retry loop rather than
+  # trusting a single attempt. IF NOT EXISTS also keeps re-runs idempotent.
+  echo "Creating primary index on ${BUCKET} (retrying until the index service accepts DDL)..."
+  if ! retry_until "CREATE PRIMARY INDEX on ${BUCKET}" 180 \
+      run_query "CREATE PRIMARY INDEX IF NOT EXISTS ON \`${BUCKET}\`"; then
+    echo "FATAL: could not create primary index on ${BUCKET} for region-${REGION} within deadline" >&2
+    exit 1
+  fi
+
   # The region marker is how the harness attributes each operation to a
-  # cluster. Without it "did it switch" is guesswork.
-  run_query "UPSERT INTO \`${BUCKET}\` (KEY, VALUE) VALUES (\"region::marker\", {\"region\":\"${REGION}\"})"
+  # cluster. Without it "did it switch" is guesswork, so this UPSERT gets the
+  # same retry treatment, and its success is verified by reading it back
+  # rather than trusted blindly.
+  echo "Writing region::marker for region-${REGION} (retrying until it succeeds)..."
+  if ! retry_until "UPSERT region::marker" 180 \
+      run_query "UPSERT INTO \`${BUCKET}\` (KEY, VALUE) VALUES (\"region::marker\", {\"region\":\"${REGION}\"})"; then
+    echo "FATAL: could not write region::marker for region-${REGION} within deadline" >&2
+    exit 1
+  fi
+
+  echo "Verifying region::marker is readable for region-${REGION}..."
+  if ! retry_until "verify region::marker readable" 60 verify_marker_readable; then
+    echo "FATAL: region::marker for region-${REGION} was written but is not readable back; init must not silently skip the marker" >&2
+    exit 1
+  fi
+  echo "region::marker verified readable for region-${REGION}."
 }
 
 all_nodes_ready

@@ -8,6 +8,27 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
   stack (`cng-a` 5 nodes replica 1, `cng-b` 1 node replica 0), bucket `lbtest`,
   region marker doc, observe-only Observer per region on host ports 8181/8182.
   Next: Task 2, standalone CNG per region.
+- Task 7 done: `test/compose-cng/lib.sh` + `lb_e2e.sh` (scenarios 1 to 3),
+  `assert_le` rejects negative windows, `recover_region_a` server-adds and
+  rebalances a node auto-failover removed. Also fixed a real defect found by
+  the first scenario 3 run: region-b's single node raced data, index and
+  query startup, so `create_index_and_marker` in `init-cluster.sh` could hit
+  `CREATE PRIMARY INDEX` before the index service was ready, get HTTP 500,
+  and die under `set -euo pipefail` before writing `region::marker` at all.
+  That is a silent init failure, not a scenario failure: the switch still
+  happened, the harness just could not attribute it. Fixed by retrying both
+  the index creation and the marker upsert with backoff, and verifying the
+  marker reads back before init exits. `stack_up` now also asserts
+  `region::marker` is readable in both regions before any scenario runs, so a
+  missing marker fails setup loudly instead of degrading into
+  "unattributed". A second real defect surfaced on review of the real run's
+  CSVs: `csv_error_window_ms` measured first-error-to-first-success-after-it,
+  but during a partial outage the surviving data node keeps answering some
+  requests, so successes interleave with failures and that measure latched
+  onto a 1-2ms blip instead of the true outage. It now measures the longest
+  stretch with no successful operation at all, confirmed against the real s2
+  (5064ms) and s3 (26381ms) CSVs, both still inside their 60s/120s bounds.
+  Next: Task 8.
 
 ## Health follows ACTIVE cluster after switch (2026-08-26, #38)
 
