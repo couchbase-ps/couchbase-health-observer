@@ -8,11 +8,10 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
   stack (`cng-a` 5 nodes replica 1, `cng-b` 1 node replica 0), bucket `lbtest`,
   region marker doc, observe-only Observer per region on host ports 8181/8182.
   Next: Task 2, standalone CNG per region.
-- Task 7 done: `test/compose-cng/lib.sh` + `lb_e2e.sh` (scenarios 1 to 3),
-  `assert_le` rejects negative windows, `recover_region_a` server-adds and
-  rebalances a node auto-failover removed. Also fixed a real defect found by
-  the first scenario 3 run: region-b's single node raced data, index and
-  query startup, so `create_index_and_marker` in `init-cluster.sh` could hit
+- Task 7 done: `test/compose-cng/lib.sh` + `lb_e2e.sh` (scenarios 1 to 3).
+  Also fixed a real defect found by the first scenario 3 run:
+  region-b's single node raced data, index and query startup, so
+  `create_index_and_marker` in `init-cluster.sh` could hit
   `CREATE PRIMARY INDEX` before the index service was ready, get HTTP 500,
   and die under `set -euo pipefail` before writing `region::marker` at all.
   That is a silent init failure, not a scenario failure: the switch still
@@ -21,14 +20,34 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
   marker reads back before init exits. `stack_up` now also asserts
   `region::marker` is readable in both regions before any scenario runs, so a
   missing marker fails setup loudly instead of degrading into
-  "unattributed". A second real defect surfaced on review of the real run's
-  CSVs: `csv_error_window_ms` measured first-error-to-first-success-after-it,
-  but during a partial outage the surviving data node keeps answering some
-  requests, so successes interleave with failures and that measure latched
-  onto a 1-2ms blip instead of the true outage. It now measures the longest
-  stretch with no successful operation at all, confirmed against the real s2
-  (5064ms) and s3 (26381ms) CSVs, both still inside their 60s/120s bounds.
-  Next: Task 8.
+  "unattributed".
+- Task 7 correction (same day, review round 1): an earlier note here claimed
+  `recover_region_a` "server-adds and rebalances a node auto-failover
+  removed", which was never true and was never actually exercised, because
+  its membership check (`grep` for the hostname string in `pools/default`)
+  cannot tell "active" apart from "inactiveFailed". Couchbase auto-failover
+  marks a node `inactiveFailed` but LEAVES it listed in `pools/default`; only
+  an explicit rebalance-out removes it. The grep always matched, so the
+  helper always logged "already has all 5 nodes" and never repaired
+  anything, on either run. `recover_region_a` now parses `clusterMembership`
+  with `jq` and repairs the two cases correctly: absent -> `server-add`,
+  present but not `active` -> `couchbase-cli recovery --recovery-type full`,
+  either way followed by one `rebalance`, then verifies all five nodes are
+  `active` and fails loudly if not. Confirmed by direct log evidence: it
+  detected `cb-a-data-2` as `inactiveFailed` in scenario 2, ran the recovery,
+  and rebalanced. `csv_error_window_ms` also had a second real defect: it
+  only measured gaps between two `ok` rows, missing a leading or trailing
+  outage entirely. Fixed to bound the run by its first and last row
+  timestamps, so a leading or trailing all-error stretch is measured too.
+  `retry_until` in `init-cluster.sh` now surfaces the last failing attempt's
+  output on a `FATAL` exit instead of discarding it, and the re-add wait for
+  a genuinely absent node is now bounded (180s) rather than infinite.
+  Re-ran the full suite under the corrected topology: still `s2` no switch
+  (true availability gap ~5070ms), still `s3` switch fires (true gap
+  ~26372ms), both within noise of the earlier, topologically-wrong run. The
+  scenario 2/3 discriminator held regardless, but that is not something the
+  earlier, silently-no-op `recover_region_a` had actually proven. Next:
+  Task 8.
 
 ## Health follows ACTIVE cluster after switch (2026-08-26, #38)
 

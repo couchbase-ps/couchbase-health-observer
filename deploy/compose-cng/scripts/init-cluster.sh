@@ -163,14 +163,18 @@ run_query() {
 # repeatedly with exponential backoff (2s, capped at 15s) until it succeeds or
 # the deadline passes. Used under set -e, so the caller checks the return
 # value with "if ! retry_until ..." rather than letting a failure kill the
-# script outright.
+# script outright. Every attempt's output is captured rather than discarded,
+# and the LAST (failing) attempt's output is printed on timeout, so a FATAL
+# exit after this carries the actual error instead of nothing at all.
 retry_until() {
   local desc="$1" deadline_s="$2"; shift 2
-  local start deadline delay=2
+  local start deadline delay=2 out
   start="$(date +%s)"; deadline=$((start + deadline_s))
-  until "$@" >/dev/null 2>&1; do
+  until out="$("$@" 2>&1)"; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
       echo "retry_until: ${desc} did not succeed within ${deadline_s}s" >&2
+      echo "retry_until: last attempt's output:" >&2
+      echo "$out" >&2
       return 1
     fi
     sleep "$delay"

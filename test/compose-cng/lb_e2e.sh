@@ -36,11 +36,14 @@ scenario_2() {
   local win; win="$(csv_error_window_ms s2)"
   echo "s2 error window: ${win}ms"
   assert_le "s2 recovered inside 60s" "$win" "60000"
-  # Auto-failover absorbed the single-node loss above, which REMOVES the node
-  # from the cluster map: a plain "docker start" would leave region-a on only
-  # two data nodes for every scenario after this one. recover_region_a
-  # server-adds and rebalances it back in.
-  echo "-- restoring cb-a-data-2 (auto-failover removed it from the cluster map) --"
+  # Auto-failover absorbed the single-node loss above, which marks the node
+  # "inactiveFailed" in pools/default: Couchbase leaves it listed, it does
+  # NOT remove it, so a plain "docker start" brings the container back but
+  # does not restore its cluster membership. recover_region_a detects the
+  # inactiveFailed state and runs a full recovery plus rebalance to put it
+  # back to "active" before any later scenario relies on region-a having all
+  # three data nodes.
+  echo "-- restoring cb-a-data-2 (auto-failover marked it inactiveFailed, not removed) --"
   recover_region_a
 }
 

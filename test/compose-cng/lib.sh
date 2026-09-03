@@ -152,7 +152,8 @@ csv_regions() {
 }
 
 # csv_error_window_ms <csv name> -> longest stretch in milliseconds containing
-# no successful operation. This is the customer-visible availability gap.
+# no successful operation, counting the whole run. This is the
+# customer-visible availability gap.
 #
 # A naive "first error to first success after it" measure is wrong here:
 # during a partial outage the surviving data node keeps serving some
@@ -160,38 +161,72 @@ csv_regions() {
 # that measure latches onto the first success after the very first error,
 # which can be a 1-2ms blip instead of the real multi-second outage.
 #
+# Measuring only gaps BETWEEN two "ok" rows is also wrong: it misses a
+# leading outage (failures before the first success) and a trailing outage
+# (failures running to the end of the run with no later success), because
+# neither has an "ok" row on both sides to measure between. The first
+# non-idle row's timestamp is the run's start boundary and the last
+# non-idle row's timestamp is its end boundary, so a leading or trailing gap
+# is measured against those instead of being skipped.
+#
 # -1 when the run recorded no successful operation at all: that is not a
 # passing zero-length window, it is an undefined gap, and the caller must
 # treat -1 as a failed bound, same as before.
 csv_error_window_ms() {
   awk -F, '
     NR>1 && $2!="idle" {
+      if (start=="") start=$1
+      end=$1
       if ($3=="ok") {
-        if (prev!="") { g=$1-prev; if (g>max) max=g }
+        if (prev=="") { g=$1-start } else { g=$1-prev }
+        if (g>max) max=g
         prev=$1; seen=1
       }
     }
     END {
-      if (!seen) { print -1 } else { print max+0 }
+      if (!seen) { print -1; exit }
+      g=end-prev
+      if (g>max) max=g
+      print max+0
     }' "$OUT_DIR/$1.csv"
 }
 
-# recover_region_a: after Couchbase auto-failover, a removed node's container
-# coming back with "docker start" does NOT rejoin the cluster map; it needs a
-# couchbase-cli server-add plus a rebalance. This only happens on the
-# single-node loss path (scenario 2): auto-failover absorbs it and removes it.
-# Stopping two data nodes together (scenario 3) is refused by auto-failover,
-# so neither node ever leaves the cluster map and both rejoin as active
-# members on a plain "docker start" alone, which makes this a no-op there.
+# node_membership <pools/default json> <node short name> -> prints the
+# clusterMembership value ("active", "inactiveAdded", "inactiveFailed") for
+# that node, or empty if the node is genuinely absent from the nodes array.
+# Parsed with jq rather than grepped, because a grep for the hostname string
+# alone cannot tell "active" apart from "inactiveFailed": Couchbase
+# auto-failover sets clusterMembership to "inactiveFailed" but LEAVES the
+# failed node in the nodes array, and only an explicit rebalance-out removes
+# it. A hostname-presence grep reports "already has all 5 nodes" even for a
+# failed-over, inactive node, which is a defect this function exists to avoid
+# repeating.
+node_membership() {
+  echo "$1" | jq -r --arg h "$2.local:8091" \
+    '.nodes[]? | select(.hostname==$h) | .clusterMembership' 2>/dev/null
+}
+
+# recover_region_a: after Couchbase auto-failover, a node is marked
+# "inactiveFailed" but stays listed in pools/default; a plain "docker start"
+# brings its container back but does NOT restore its cluster membership. The
+# two cases need two different couchbase-cli repairs:
+#   - genuinely absent from pools/default -> server-add
+#   - listed but not "active" (inactiveFailed/inactiveAdded) -> a full
+#     recovery (couchbase-cli recovery --recovery-type full)
+# Either case is followed by one rebalance to actually apply it. Stopping two
+# data nodes together (scenario 3) is refused by auto-failover, so this is
+# expected to be a no-op there; scenario 2's single-node loss is expected to
+# need the recovery path, since auto-failover only ever produces
+# "inactiveFailed", never removal from pools/default.
 #
-# Starts every region-a container, compares pools/default (read through
-# cb-a-data-1, which no scenario ever stops) against the five expected nodes,
-# server-add plus rebalances whatever is missing, then waits for region-a's
-# Observer to report UP. Node hostnames in pools/default carry a ".local"
-# suffix (e.g. "cb-a-data-2.local:8091"), so that is what gets matched.
+# Starts every region-a container, reads pools/default once (through
+# cb-a-data-1, which no scenario ever stops), repairs whatever is not
+# "active", rebalances if anything was repaired, waits for region-a's
+# Observer to report UP, then re-reads pools/default and fails loudly if any
+# of the five nodes is still not "active".
 recover_region_a() {
   echo "== recover_region_a: checking region-a cluster membership =="
-  local n svc pools added=0
+  local n svc pools membership repaired=0
 
   for n in $REGION_A_NODES; do
     docker start "$n" >/dev/null 2>&1 || true
@@ -204,29 +239,52 @@ recover_region_a() {
       cb-a-iq-*) svc="index,query" ;;
       *)         svc="data" ;;
     esac
-    if echo "$pools" | grep -q "\"hostname\":\"$n.local:8091\""; then
+    membership="$(node_membership "$pools" "$n")"
+
+    if [ "$membership" = "active" ]; then
       continue
     fi
-    echo "-- $n missing from pools/default, re-adding --"
-    docker exec cb-a-data-1 bash -c \
-      "until curl -sS -o /dev/null http://$n:8091 2>/dev/null; do sleep 3; done"
-    docker exec cb-a-data-1 /opt/couchbase/bin/couchbase-cli server-add \
-      --cluster https://cb-a-data-1:18091 \
-      --username Administrator --password password \
-      --server-add "https://$n.local:18091" \
-      --server-add-username Administrator --server-add-password password \
-      --services "$svc" --no-ssl-verify
-    added=$((added+1))
+
+    if [ -z "$membership" ]; then
+      echo "-- $n absent from pools/default, re-adding --"
+      if ! docker exec cb-a-data-1 bash -c \
+          "for _ in \$(seq 1 60); do curl -sS -o /dev/null http://$n:8091 2>/dev/null && exit 0; sleep 3; done; exit 1"; then
+        echo "FAIL: recover_region_a: $n did not come up on port 8091 within 180s"
+        FAIL=1
+        continue
+      fi
+      docker exec cb-a-data-1 /opt/couchbase/bin/couchbase-cli server-add \
+        --cluster https://cb-a-data-1:18091 \
+        --username Administrator --password password \
+        --server-add "https://$n.local:18091" \
+        --server-add-username Administrator --server-add-password password \
+        --services "$svc" --no-ssl-verify
+    else
+      echo "-- $n is ${membership} in pools/default, running full recovery --"
+      docker exec cb-a-data-1 /opt/couchbase/bin/couchbase-cli recovery \
+        --cluster https://cb-a-data-1:18091 \
+        --username Administrator --password password \
+        --server-recovery "$n.local:8091" \
+        --recovery-type full --no-ssl-verify
+    fi
+    repaired=$((repaired+1))
   done
 
-  if [ "$added" -gt 0 ]; then
-    echo "-- rebalancing region-a after re-add --"
+  if [ "$repaired" -gt 0 ]; then
+    echo "-- rebalancing region-a after recovery/re-add --"
     docker exec cb-a-data-1 /opt/couchbase/bin/couchbase-cli rebalance \
       --cluster https://cb-a-data-1:18091 \
       --username Administrator --password password --no-ssl-verify
   else
-    echo "-- region-a already has all 5 nodes, nothing to recover --"
+    echo "-- region-a already has all 5 nodes active, nothing to recover --"
   fi
 
   assert_eq "region-a observer UP after recovery" "$(wait_observer 8181 UP)" "UP"
+
+  echo "== recover_region_a: verifying all five nodes are active =="
+  pools="$(curl -fsS -u Administrator:password http://localhost:8191/pools/default 2>/dev/null || true)"
+  for n in $REGION_A_NODES; do
+    membership="$(node_membership "$pools" "$n")"
+    assert_eq "region-a $n active after recovery" "$membership" "active"
+  done
 }
