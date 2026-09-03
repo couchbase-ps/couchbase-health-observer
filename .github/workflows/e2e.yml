@@ -76,3 +76,29 @@ jobs:
         run: |
           kubectl get pods -A -o wide || true
           kubectl get couchbaseclusters -A || true
+
+  compose-cng-lb-e2e:
+    runs-on: ubuntu-latest
+    # Two Couchbase clusters, two CNG containers, Envoy and a Maven build, plus
+    # scenarios that each wait out a 60s health-check window. Slower than every
+    # other job here.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: CNG load-balancer failover e2e
+        run: test/compose-cng/lb_e2e.sh
+      - name: upload harness CSVs and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cng-lb-output
+          path: /tmp/cng-lb-out
+          if-no-files-found: warn
+      - name: dump state on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          curl -sS http://localhost:19901/clusters || true
+          docker logs cng-envoy 2>&1 | tail -100 || true
+          docker logs cng-a 2>&1 | tail -50 || true
+          docker logs cb-a-observer 2>&1 | tail -50 || true
