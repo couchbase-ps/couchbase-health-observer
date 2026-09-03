@@ -40,6 +40,9 @@ static_resources:
     connect_timeout: 2s
     type: STATIC
     lb_policy: ROUND_ROBIN
+    # MANDATORY. Default is false, which only stops NEW connections to a dead
+    # host and leaves the SDK's established gRPC channel alive on it, so no
+    # failover happens at all. Documented as supported for tcp_proxy only.
     close_connections_on_host_health_failure: true
     common_lb_config:
       # healthy_panic_threshold defaults to 50 percent, and in panic mode Envoy
@@ -54,7 +57,18 @@ static_resources:
     # 5s x 12 = a 60s sustained-down window. It must exceed the cluster
     # auto-failover timeout of 30s, or a single absorbed node loss would trip
     # the switch. Jitter is left at zero so the window stays exact.
-    - timeout: 2s
+    # timeout is 4s, above the brief's original 2s. The whole point of this
+    # design is that the load balancer reads the Observer's verdict, not the
+    # Observer's latency. The Observer re-probes the cluster on every request
+    # and its own probe bound is 2s, so a 2s Envoy timeout can expire before
+    # the Observer ever gets to answer with its 503, and Envoy then records a
+    # network failure instead of reading the status code at all. That leaves
+    # retriable_statuses unable to do anything, and it also means a merely
+    # slow but still healthy Observer would read as unhealthy and cause a
+    # false failover, which is worse than the flapping the debounce below
+    # exists to prevent. 4s clears the Observer's 2s bound while staying under
+    # the 5s interval, so checks still fire back to back with no overlap.
+    - timeout: 4s
       interval: 5s
       unhealthy_threshold: 12
       healthy_threshold: 2
