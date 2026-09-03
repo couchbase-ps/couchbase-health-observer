@@ -40,15 +40,60 @@ static_resources:
     connect_timeout: 2s
     type: STATIC
     lb_policy: ROUND_ROBIN
-    # MANDATORY. Default is false, which only stops NEW connections to a dead
-    # host and leaves the SDK's established gRPC channel alive on it, so no
-    # failover happens at all. Documented as supported for tcp_proxy only.
     close_connections_on_host_health_failure: true
+    common_lb_config:
+      # healthy_panic_threshold defaults to 50 percent, and in panic mode Envoy
+      # disregards health status and routes to hosts it knows are unhealthy. On a
+      # dual outage that means the SDK is sent to a dead cluster instead of
+      # failing fast. fail_traffic_on_panic makes Envoy fail the requests
+      # instead, which is both better for the app and legible in the CSV.
+      healthy_panic_threshold: { value: 50 }
+      zone_aware_lb_config:
+        fail_traffic_on_panic: true
+    health_checks:
+    # 5s x 12 = a 60s sustained-down window. It must exceed the cluster
+    # auto-failover timeout of 30s, or a single absorbed node loss would trip
+    # the switch. Jitter is left at zero so the window stays exact.
+    - timeout: 2s
+      interval: 5s
+      unhealthy_threshold: 12
+      healthy_threshold: 2
+      # no_traffic_interval defaults to 60s and "takes precedence over any
+      # other", so without this the first check after startup is a minute away.
+      no_traffic_interval: 5s
+      http_health_check:
+        path: /health/couchbase
+        # MANDATORY. For an HTTP health check, a status outside
+        # expected_statuses bypasses unhealthy_threshold entirely and marks the
+        # host unhealthy IMMEDIATELY. The Observer answers 503 on DOWN, so
+        # without 503 listed here the 60s window above is a no-op and scenario 2
+        # switches on the first check. Int64Range is half open, so 503..504
+        # covers 503 alone.
+        retriable_statuses:
+        - start: 503
+          end: 504
     load_assignment:
       cluster_name: cng_cluster
       endpoints:
+      # Priority 0 is region-a. Envoy keeps all traffic here while it is
+      # healthy and shifts to priority 1 only as this level degrades.
       - priority: 0
         lb_endpoints:
         - endpoint:
             address:
               socket_address: { address: 172.28.1.10, port_value: 18098 }
+            # Traffic goes to CNG above; the verdict comes from the Observer
+            # here. health_check_config.address redirects the check to a
+            # different host entirely, and it requires a literal IP: this path
+            # performs no DNS resolution.
+            health_check_config:
+              address:
+                socket_address: { address: 172.28.1.11, port_value: 8080 }
+      - priority: 1
+        lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: 172.28.2.10, port_value: 18098 }
+            health_check_config:
+              address:
+                socket_address: { address: 172.28.2.11, port_value: 8080 }
