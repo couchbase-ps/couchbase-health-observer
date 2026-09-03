@@ -146,6 +146,77 @@ scenario_6() {
   assert_eq "s6 no errors after the idle gap" "$post_err" "0"
 }
 
+scenario_7() {
+  echo "== scenario 7: auto-failback strands writes taken on region-b =="
+  # Envoy has NO latch. /healthcheck/fail and /healthcheck/ok control this
+  # Envoy's own inbound health, not upstream host state. Outlier detection
+  # self-clears. A high healthy_threshold only delays, and a restart bypasses it
+  # because startup marks a host healthy on ONE success. So priority 0 reclaims
+  # traffic automatically the moment region-a recovers.
+  #
+  # With no XDCR that is a correctness event, not just a routing one. This
+  # scenario records it rather than hiding it.
+  local doc="stranded::$(date +%s)"
+
+  echo "-- forcing a switch to region-b --"
+  docker stop cb-a-data-2 cb-a-data-3 >/dev/null
+  sleep 90
+  assert_eq "s7 envoy on region-b" "$(envoy_health 172.28.1.10)" "failed_active_hc"
+
+  echo "-- writing $doc through the LB while region-b is serving --"
+  docker run --rm --network cng-lb-net \
+    -v "$CNG_DIR/certs:/certs:ro" \
+    -e CB_CONN='couchbase2://cng-lb' -e TLS_CA=/certs/ca.crt \
+    -e CB_BUCKET=lbtest -e RUN_SECONDS=6 -e OPS_PER_SEC=2 \
+    -e OUT_CSV=/dev/null \
+    "$HARNESS_IMAGE" >/dev/null 2>&1 || true
+  # Write the marker document directly into region-b so the identity is exact.
+  docker exec cb-b-node-1 curl -fsS -u Administrator:password \
+    http://cb-b-node-1:8093/query/service \
+    --data-urlencode "statement=UPSERT INTO \`lbtest\` (KEY, VALUE) VALUES (\"$doc\", {\"written_in\":\"b\"})" \
+    >/dev/null
+  echo "-- confirming it is readable while region-b serves --"
+  local before
+  before="$(docker exec cb-b-node-1 curl -fsS -u Administrator:password \
+    http://cb-b-node-1:8093/query/service \
+    --data-urlencode "statement=SELECT RAW COUNT(*) FROM \`lbtest\` USE KEYS \"$doc\"" \
+    | jq -r '.results[0]')"
+  assert_eq "s7 doc present in region-b" "$before" "1"
+
+  echo "-- harness first, so the CSV captures traffic on BOTH sides of the failback --"
+  # Ordering matters: if the harness starts after region-a recovers, Envoy has
+  # already failed back and the CSV shows only "a", so the flip is invisible.
+  run_harness s7 240
+  sleep 10
+  echo "-- restoring region-a and letting Envoy fail back on its own --"
+  docker start cb-a-data-2 cb-a-data-3 >/dev/null
+  assert_eq "s7 region-a observer recovered" "$(wait_observer 8181 UP)" "UP"
+  wait_harness s7
+  assert_eq "s7 failed back to region-a automatically" "$(envoy_health 172.28.1.10)" "healthy"
+  assert_eq "s7 traffic returned to region-a" "$(csv_regions s7)" "b a"
+
+  echo "-- the point: the region-b write is not in region-a --"
+  local after
+  after="$(docker exec cb-a-data-1 curl -fsS -u Administrator:password \
+    http://cb-a-iq-1:8093/query/service \
+    --data-urlencode "statement=SELECT RAW COUNT(*) FROM \`lbtest\` USE KEYS \"$doc\"" \
+    | jq -r '.results[0]')"
+  assert_eq "s7 doc ABSENT in region-a after failback" "$after" "0"
+
+  {
+    echo "scenario 7 evidence, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "document: $doc"
+    echo "count in region-b while region-b served: $before"
+    echo "count in region-a after automatic failback: $after"
+    echo
+    echo "Envoy has no latch, so priority 0 reclaimed traffic as soon as"
+    echo "region-a recovered. Without XDCR every write taken on region-b is"
+    echo "invisible after failback. This is why manual failback is a hard"
+    echo "requirement on whatever load balancer the customer deploys."
+  } > "$OUT_DIR/s7-stranded.txt"
+  echo "wrote $OUT_DIR/s7-stranded.txt"
+}
+
 case "${1:-test}" in
   down) echo "== tearing down =="; stack_down; echo done; exit 0 ;;
   up)   stack_up; echo "== stack up, host ports: envoy 18098, admin 19901, observers 8181/8182 =="; exit "$FAIL" ;;
@@ -168,6 +239,7 @@ case "${1:-test}" in
     scenario_4
     scenario_5
     scenario_6
+    scenario_7
     if [ "$FAIL" -eq 0 ]; then echo "== ALL SCENARIOS PASSED =="; else echo "== SCENARIOS FAILED =="; fi
     exit "$FAIL"
     ;;
