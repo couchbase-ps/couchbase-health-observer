@@ -1,0 +1,28 @@
+# Envoy sits outside both regions' failure domains, which is why it is its own
+# compose project rather than a service inside either region.
+#
+#   docker compose -p cng-lb -f docker-compose.yml up -d
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: cng-envoy
+    networks:
+      cng-lb-net:
+        ipv4_address: 172.28.0.10
+        # cng-lb is the name in the certificate SANs, so this alias is what
+        # makes couchbase2://cng-lb verify under TLS passthrough.
+        aliases: ["cng-lb"]
+    ports:
+      - "18098:18098"
+      - "19901:9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    command:
+      - "-c"
+      - "/etc/envoy/envoy.yaml"
+      - "--log-level"
+      - "info"
+
+networks:
+  cng-lb-net:
+    external: true

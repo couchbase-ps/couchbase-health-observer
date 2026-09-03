@@ -1,0 +1,54 @@
+# Envoy for the CNG load-balancer test.
+#
+# L4 TCP passthrough, not L7. CNG explicitly removes client topology awareness
+# ("Clients do not receive cluster topology information"), and Java enforces a
+# single host in a couchbase2:// string, so the client can never dial around
+# this proxy. Passthrough also keeps Envoy out of the crypto path, which is the
+# only mode that preserves end-to-end mTLS.
+#
+# Note Couchbase recommends an L7 gRPC-aware balancer for throughput, because
+# L4 cannot rebalance streams mid-connection. That is a load-distribution
+# concern, not a failover one, and this test has a single client.
+#
+# The health check deliberately targets a DIFFERENT ADDRESS from the traffic
+# destination: traffic goes to CNG, the verdict comes from the Observer. That
+# separation is the whole point of the design, and it is the capability most
+# load balancers lack.
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
+static_resources:
+  listeners:
+  - name: cng_listener
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 18098 }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: cng_tcp
+          cluster: cng_cluster
+          # grpc-java configures no client keepalive by default, so an idle
+          # client would be reset by a short idle timeout and the reset would
+          # look exactly like the failover we are measuring. One hour.
+          idle_timeout: 3600s
+
+  clusters:
+  - name: cng_cluster
+    connect_timeout: 2s
+    type: STATIC
+    lb_policy: ROUND_ROBIN
+    # MANDATORY. Default is false, which only stops NEW connections to a dead
+    # host and leaves the SDK's established gRPC channel alive on it, so no
+    # failover happens at all. Documented as supported for tcp_proxy only.
+    close_connections_on_host_health_failure: true
+    load_assignment:
+      cluster_name: cng_cluster
+      endpoints:
+      - priority: 0
+        lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: 172.28.1.10, port_value: 18098 }
