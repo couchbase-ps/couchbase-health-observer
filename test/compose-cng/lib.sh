@@ -263,6 +263,41 @@ wait_pools_default() {
   return 1
 }
 
+# wait_rebalance_idle [timeout_s] -> prints "ok" and returns 0 once the
+# cluster's own rebalance task is not running and finished with no error;
+# prints the cluster's own error message (or "timeout: ...") and returns 1
+# otherwise.
+#
+# "couchbase-cli rebalance" returning 0 is not proof the rebalance actually
+# completed cleanly, and a node reading back "active" in pools/default is
+# even less proof: a rebalance that fails partway through can leave uneven
+# vBucket ownership while every node still shows "active", since membership
+# and data placement are two different things. Confirmed against a live
+# 8.0.1-4792-enterprise cluster: /pools/default/tasks always carries exactly
+# one entry with type "rebalance"; its "status" is "running" or "notRunning",
+# and on a failed rebalance it additionally carries an "errorMessage" field
+# that is simply absent after a clean one. That field, not the CLI's exit
+# code and not node membership, is the source of truth used here.
+wait_rebalance_idle() {
+  local secs="${1:-120}" i tasks status err
+  for i in $(seq 1 "$secs"); do
+    tasks="$(curl -fsS -u Administrator:password http://localhost:8191/pools/default/tasks 2>/dev/null || true)"
+    status="$(echo "$tasks" | jq -r '.[] | select(.type=="rebalance") | .status' 2>/dev/null)"
+    if [ "$status" = "notRunning" ]; then
+      err="$(echo "$tasks" | jq -r '.[] | select(.type=="rebalance") | .errorMessage // empty' 2>/dev/null)"
+      if [ -n "$err" ]; then
+        echo "$err"
+        return 1
+      fi
+      echo "ok"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timeout: rebalance still running or cluster unreachable after ${secs}s"
+  return 1
+}
+
 # recover_region_a: after Couchbase auto-failover, a node is marked
 # "inactiveFailed" but stays listed in pools/default; a plain "docker start"
 # brings its container back but does NOT restore its cluster membership. The
@@ -280,9 +315,12 @@ wait_pools_default() {
 #
 # Starts every region-a container, waits for cb-a-data-1's management API to
 # return a real pools/default body (see wait_pools_default), repairs
-# whatever is not "active", rebalances only if a repair actually succeeded,
-# waits for region-a's Observer to report UP, then re-reads pools/default
-# and fails loudly if any of the five nodes is still not "active".
+# whatever is not "active", rebalances only if a repair actually succeeded
+# and verifies that rebalance actually finished with no error (see
+# wait_rebalance_idle; a retry, not a shrug, is what happens on a genuine
+# rebalance failure), waits for region-a's Observer to report UP, then
+# re-reads pools/default and fails loudly if any of the five nodes is still
+# not "active".
 recover_region_a() {
   echo "== recover_region_a: checking region-a cluster membership =="
   local n svc pools membership attempted=0 repaired=0 ok
@@ -353,10 +391,36 @@ recover_region_a() {
   done
 
   if [ "$repaired" -gt 0 ]; then
-    echo "-- rebalancing region-a after recovery/re-add --"
-    docker exec cb-a-data-1 /opt/couchbase/bin/couchbase-cli rebalance \
-      --cluster https://cb-a-data-1:18091 \
-      --username Administrator --password password --no-ssl-verify
+    # Third silent-failure guard in this function: neither the CLI's own exit
+    # status nor "every node reads back active" afterward is proof the
+    # rebalance actually finished cleanly. A rebalance that fails partway can
+    # leave uneven vBucket ownership while membership still shows "active"
+    # for all five nodes, so this checks the cluster's own rebalance task
+    # (wait_rebalance_idle) as the real source of truth, retries the whole
+    # rebalance once on a genuine failure, and only then gives up loudly.
+    local rebalance_ok=0 attempt cli_status verify
+    for attempt in 1 2; do
+      echo "-- rebalancing region-a after recovery/re-add (attempt $attempt of 2) --"
+      cli_status=0
+      docker exec cb-a-data-1 /opt/couchbase/bin/couchbase-cli rebalance \
+        --cluster https://cb-a-data-1:18091 \
+        --username Administrator --password password --no-ssl-verify || cli_status=$?
+
+      echo "-- verifying the rebalance actually completed (the CLI returning is not proof by itself) --"
+      verify="$(wait_rebalance_idle 120)"
+      if [ "$cli_status" -eq 0 ] && [ "$verify" = "ok" ]; then
+        rebalance_ok=1
+        break
+      fi
+      echo "-- rebalance attempt $attempt did not verify complete: cli_exit=$cli_status cluster_report=$verify --"
+    done
+
+    if [ "$rebalance_ok" -eq 1 ]; then
+      echo "-- rebalance verified complete --"
+    else
+      echo "FAIL: recover_region_a: rebalance did not complete successfully after a retry"
+      FAIL=1
+    fi
   elif [ "$attempted" -gt 0 ]; then
     echo "-- all attempted repairs failed, skipping rebalance --"
   else
