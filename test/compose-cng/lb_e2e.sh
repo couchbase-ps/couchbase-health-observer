@@ -421,6 +421,43 @@ scenario_10() {
   recover_region_a
 }
 
+scenario_8() {
+  echo "== scenario 8: repeat the switch with verified TLS, no skip-verify =="
+  # Every other scenario already runs with TLS_CA set, so this is the explicit
+  # negative-and-positive pair: verification ON must switch cleanly, and
+  # verification against the WRONG CA must fail, proving the chain is really
+  # being checked rather than quietly skipped.
+  echo "-- negative control: verify against a CA that did not sign the cert --"
+  local bad; bad="$(mktemp -d)"
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+    -keyout "$bad/other.key" -out "$bad/other.crt" -subj "/CN=not-our-ca" 2>/dev/null
+  chmod 644 "$bad/other.crt"
+  docker run --rm --network cng-lb-net \
+    -v "$OUT_DIR:/out" -v "$bad:/bad:ro" \
+    -e CB_CONN='couchbase2://cng-lb' -e TLS_CA=/bad/other.crt \
+    -e CB_BUCKET=lbtest -e RUN_SECONDS=15 -e OPS_PER_SEC=5 \
+    -e OUT_CSV=/out/s8-neg.csv \
+    "$HARNESS_IMAGE" >/dev/null 2>&1 || true
+  rm -rf "$bad"
+  assert_eq "s8 wrong CA yields zero successes" \
+    "$(csv_summary s8-neg | sed 's/ err=.*//; s/ok=//')" "0"
+
+  echo "-- positive: correct CA, force a switch, expect a clean flip --"
+  docker start cb-a-data-2 cb-a-data-3 >/dev/null 2>&1 || true
+  assert_eq "s8 region-a observer healthy before the run" "$(wait_observer 8181 UP)" "UP"
+  sleep 30
+  docker compose -p cng-lb -f "$CNG_DIR/envoy/docker-compose.yml" up -d --force-recreate >/dev/null
+  sleep 20
+  run_harness s8 180
+  sleep 10
+  docker stop cb-a-data-2 cb-a-data-3 >/dev/null
+  wait_harness s8
+  assert_eq "s8 switched under verified TLS" "$(csv_regions s8)" "a b"
+  local win; win="$(csv_error_window_ms s8)"
+  echo "s8 error window across the switch: ${win}ms"
+  assert_le "s8 recovered inside 120s" "$win" "120000"
+}
+
 case "${1:-test}" in
   down) echo "== tearing down =="; stack_down; echo done; exit 0 ;;
   up)   stack_up; echo "== stack up, host ports: envoy 18098, admin 19901, observers 8181/8182 =="; exit "$FAIL" ;;
@@ -445,6 +482,7 @@ case "${1:-test}" in
     scenario_6
     scenario_7
     scenario_10
+    scenario_8
     if [ "$FAIL" -eq 0 ]; then echo "== ALL SCENARIOS PASSED =="; else echo "== SCENARIOS FAILED =="; fi
     exit "$FAIL"
     ;;
