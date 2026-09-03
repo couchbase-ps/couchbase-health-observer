@@ -49,9 +49,12 @@ services:
       - "--data-port=18098"
       - "--web-port=9091"
       - "--dapi-port=-1"
-      - "--self-sign"
+      - "--cert=/certs/server.crt"
+      - "--key=/certs/server.key"
       - "--daemon"
       - "--log-level=info"
+    volumes:
+      - ./certs:/certs:ro
 
   observer:
     build:
