@@ -258,6 +258,148 @@ scenario_7() {
   echo "wrote $OUT_DIR/s7-stranded.txt"
 }
 
+# error_profile <csv name> -> "total err pct first_err_s last_err_s span_s"
+# pct/first/last/span are meaningless when err=0, so that case prints
+# "0.00 -1 -1 -1" rather than a divide-by-zero or a false span of 0.
+# This lives here, not in lib.sh, because scenario 10 is the only caller and
+# this file is the only one this task may touch: comparing s10's error
+# profile against a same-run baseline (scenario 2) is what makes the verdict
+# below defensible instead of asserted on faith.
+error_profile() {
+  awk -F, '
+    NR>1 && $2!="idle" {
+      n++
+      if (start=="") start=$1
+      if ($3=="err") {
+        e++
+        if (fe=="") fe=$1
+        le=$1
+      }
+    }
+    END {
+      if (n==0) { print "0 0 0.00 -1 -1 -1"; exit }
+      if (e==0) { printf "%d %d 0.00 -1 -1 -1\n", n, e; exit }
+      printf "%d %d %.2f %d %d %d\n", n, e, (e/n)*100, int((fe-start)/1000), int((le-start)/1000), int((le-fe)/1000)
+    }' "$OUT_DIR/$1.csv"
+}
+
+scenario_10() {
+  echo "== scenario 10: kill the node --cb-host names, cluster otherwise healthy =="
+  # region-a CNG is started with --cb-host=cb-a-data-1 and there is no
+  # bootstrap list. Auto-failover absorbs the node loss, so the CLUSTER is fine
+  # and the Observer should report UP. The open question is whether CNG
+  # recovers. If it does not, this is a gateway that is dead in front of a live
+  # cluster, a state nothing in the current design detects.
+  run_harness s10 180
+  sleep 10
+  echo "-- stopping cb-a-data-1, the CNG bootstrap node --"
+  docker stop cb-a-data-1 >/dev/null
+  sleep 90
+  local obs cngweb envoyflag
+  obs="$(curl -s http://localhost:8181/health/couchbase | jq -r '.status // "NONE"')"
+  cngweb="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9191/health)"
+  envoyflag="$(envoy_health 172.28.1.10)"
+  wait_harness s10
+  local regions summary
+  regions="$(csv_regions s10)"
+  summary="$(csv_summary s10)"
+
+  echo "observer=$obs cng_web_http=$cngweb envoy=$envoyflag regions=$regions $summary"
+
+  # The Observer must still see a healthy cluster: auto-failover absorbed it.
+  assert_eq "s10 observer still UP (cluster absorbed the node)" "$obs" "UP"
+
+  # Round 1 fix: the original verdict required s10's error count to be
+  # exactly zero. Losing a data node always produces a brief KV disruption
+  # (vbucket movement mid-failover) regardless of what CNG does, so that
+  # branch could never fire and the scenario was guaranteed to report a
+  # product gap that does not exist. Scenario 2 stops a region-a data node
+  # with CNG's bootstrap node left untouched, so its error profile is the
+  # baseline for "auto-failover absorbed a node, no CNG involvement". s10 is
+  # judged against THAT baseline, not against zero: CNG is considered to
+  # have survived when its own health, Envoy's view, and the routing all say
+  # so, and the app-visible error profile is in the same ballpark as s2's,
+  # not an order of magnitude worse.
+  local s2_total s2_err s2_pct s2_first s2_last s2_span
+  local s10_total s10_err s10_pct s10_first s10_last s10_span
+  read -r s2_total s2_err s2_pct s2_first s2_last s2_span <<< "$(error_profile s2)"
+  read -r s10_total s10_err s10_pct s10_first s10_last s10_span <<< "$(error_profile s10)"
+
+  local comparable
+  comparable="$(awk -v s2p="$s2_pct" -v s10p="$s10_pct" -v s2s="$s2_span" -v s10s="$s10_span" 'BEGIN{
+      # Generous on purpose: this is a sanity check against "wildly worse
+      # than an ordinary absorbed node loss", not a tight statistical bound.
+      # Floors keep a near-zero s2 baseline from making the bar impossibly
+      # strict.
+      pct_max = s2p * 3; if (pct_max < 1)  pct_max = 1
+      span_max = s2s * 3; if (span_max < 60) span_max = 60
+      if (s10p <= pct_max && s10s <= span_max) print "yes"; else print "no"
+    }')"
+
+  local cng_ok="no" envoy_ok="no" routing_ok="no"
+  [ "$cngweb" = "200" ] && cng_ok="yes"
+  [ "$envoyflag" = "healthy" ] && envoy_ok="yes"
+  [ "$regions" = "a" ] && routing_ok="yes"
+
+  echo "s10 vs s2 baseline: s2 err=$s2_err/$s2_total (${s2_pct}%) first=+${s2_first}s last=+${s2_last}s span=${s2_span}s"
+  echo "                    s10 err=$s10_err/$s10_total (${s10_pct}%) first=+${s10_first}s last=+${s10_last}s span=${s10_span}s"
+  echo "cng_ok=$cng_ok envoy_ok=$envoy_ok routing_ok=$routing_ok comparable_to_s2=$comparable"
+
+  {
+    echo "scenario 10 evidence, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "Stopped cb-a-data-1, the single host named by CNG --cb-host."
+    echo "observer /health/couchbase : $obs"
+    echo "CNG :9091/health HTTP code : $cngweb"
+    echo "Envoy region-a health flag : $envoyflag"
+    echo "regions served in CSV      : $regions"
+    echo "harness outcome            : $summary"
+    echo
+    echo "Error profile, s10 (this scenario) vs s2 (absorbed node loss with"
+    echo "CNG's bootstrap node untouched, same run, the baseline for what an"
+    echo "ordinary auto-failover blip looks like with no CNG involvement):"
+    echo
+    # printf's "+" flag only applies to numeric conversions, so it is a
+    # silent no-op on a %s field: the offsets are pre-formatted with an
+    # explicit "+" here rather than relying on the flag to add one.
+    printf "%-10s %8s %8s %8s %12s %12s %8s\n" "scenario" "total" "err" "err_pct" "first_err" "last_err" "span"
+    printf "%-10s %8s %8s %7s%% %12s %12s %7ss\n" "s2" "$s2_total" "$s2_err" "$s2_pct" "+${s2_first}s" "+${s2_last}s" "$s2_span"
+    printf "%-10s %8s %8s %7s%% %12s %12s %7ss\n" "s10" "$s10_total" "$s10_err" "$s10_pct" "+${s10_first}s" "+${s10_last}s" "$s10_span"
+    echo
+    if [ "$cng_ok" = "yes" ] && [ "$envoy_ok" = "yes" ] && [ "$routing_ok" = "yes" ] && [ "$comparable" = "yes" ]; then
+      echo "RESULT: CNG survived the loss of its --cb-host bootstrap node."
+      echo "Its web port kept answering 200, Envoy kept region-a healthy, and"
+      echo "traffic never left region-a. The app-visible error profile"
+      echo "(err=$s10_err/$s10_total, ${s10_pct}%, spanning ${s10_span}s) is in the same"
+      echo "range as scenario 2's ordinary absorbed-node-loss baseline"
+      echo "(err=$s2_err/$s2_total, ${s2_pct}%, spanning ${s2_span}s), which never touches"
+      echo "CNG's bootstrap node at all. That means the disruption clients saw"
+      echo "here came from the normal vbucket movement during auto-failover,"
+      echo "not from the gateway. This closes a real risk: naming a single"
+      echo "host with --cb-host does not make CNG a single point of failure"
+      echo "when that specific node goes down and auto-failover absorbs it."
+    else
+      echo "RESULT: CNG did NOT cleanly survive the loss of its bootstrap"
+      echo "node while the cluster stayed healthy. Specifics: cng_web_200=$cng_ok"
+      echo "envoy_healthy=$envoy_ok stayed_on_region_a=$routing_ok"
+      echo "error_profile_comparable_to_s2=$comparable. This is a gateway"
+      echo "dead (or degraded beyond the ordinary failover blip) in front of"
+      echo "a live cluster, and neither the Observer nor the load balancer"
+      echo "detects it, because both report on the CLUSTER. It changes the"
+      echo "CNG tier design and belongs in the PM conversation."
+    fi
+  } > "$OUT_DIR/s10-cng-bootstrap.txt"
+  echo "wrote $OUT_DIR/s10-cng-bootstrap.txt"
+
+  # Stopping cb-a-data-1 triggers auto-failover, which leaves that node
+  # inactiveFailed in pools/default rather than removing it. A plain
+  # "docker start" brings the container back but does not restore cluster
+  # membership, so recover_region_a runs the full repair and rebalance and
+  # verifies all five nodes are active before any later scenario relies on
+  # region-a being at full baseline.
+  echo "-- restoring cb-a-data-1 (auto-failover marked it inactiveFailed, not removed) --"
+  recover_region_a
+}
+
 case "${1:-test}" in
   down) echo "== tearing down =="; stack_down; echo done; exit 0 ;;
   up)   stack_up; echo "== stack up, host ports: envoy 18098, admin 19901, observers 8181/8182 =="; exit "$FAIL" ;;
@@ -281,6 +423,7 @@ case "${1:-test}" in
     scenario_5
     scenario_6
     scenario_7
+    scenario_10
     if [ "$FAIL" -eq 0 ]; then echo "== ALL SCENARIOS PASSED =="; else echo "== SCENARIOS FAILED =="; fi
     exit "$FAIL"
     ;;
