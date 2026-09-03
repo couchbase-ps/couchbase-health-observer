@@ -16,6 +16,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 scenario_1() {
   echo "== scenario 1: baseline, both regions healthy, expect zero errors =="
+  # A short settle right after stack_up: both Observers and Envoy already
+  # report healthy at that point, but the cluster can still be settling for
+  # a few more seconds (index/query warmup, connection pools not yet primed),
+  # and a baseline started too eagerly can catch a one-off timeout on an
+  # early request. This does not touch the zero-error assertion below: a
+  # baseline that tolerates errors stops being a baseline.
+  sleep 20
   run_harness s1 30
   wait_harness s1
   assert_eq "s1 no errors" "$(csv_summary s1 | sed 's/.*err=//')" "0"
@@ -147,15 +154,23 @@ scenario_6() {
 }
 
 scenario_7() {
-  echo "== scenario 7: auto-failback strands writes taken on region-b =="
-  # Envoy has NO latch. /healthcheck/fail and /healthcheck/ok control this
-  # Envoy's own inbound health, not upstream host state. Outlier detection
-  # self-clears. A high healthy_threshold only delays, and a restart bypasses it
-  # because startup marks a host healthy on ONE success. So priority 0 reclaims
-  # traffic automatically the moment region-a recovers.
+  echo "== scenario 7: recovery splits clients by connection age, not a failback =="
+  # A prior run of this scenario asserted that traffic "fails back" to
+  # region-a automatically once it recovers, on the theory that Envoy has no
+  # latch and priority 0 reclaims traffic the moment region-a is healthy
+  # again. That is true of Envoy's OWN health view, and it is true of any NEW
+  # connection made after the recovery. It is not true of a connection that
+  # is already established: Envoy's L4 priority routing chooses an upstream
+  # only when a connection is opened, and close_connections_on_host_health_
+  # failure only evicts connections when a host goes UNHEALTHY. There is no
+  # equivalent eviction for a host becoming healthy again, so an existing
+  # connection has no mechanism to move. Failover evicts. Failback does not.
   #
-  # With no XDCR that is a correctness event, not just a routing one. This
-  # scenario records it rather than hiding it.
+  # So recovery does not "fail back", it SPLITS: a client that connected
+  # during the outage stays on region-b indefinitely, while a client that
+  # connects for the first time after the recovery lands on region-a. With
+  # no XDCR between the two clusters, that is application-tier split-brain,
+  # not a one-shot stranded write. This scenario asserts both halves.
   local doc="stranded::$(date +%s)"
 
   echo "-- forcing a switch to region-b --"
@@ -183,36 +198,62 @@ scenario_7() {
     | jq -r '.results[0]')"
   assert_eq "s7 doc present in region-b" "$before" "1"
 
-  echo "-- harness first, so the CSV captures traffic on BOTH sides of the failback --"
-  # Ordering matters: if the harness starts after region-a recovers, Envoy has
-  # already failed back and the CSV shows only "a", so the flip is invisible.
-  run_harness s7 240
+  echo "-- starting the long-lived client BEFORE region-a recovers --"
+  # This connection is opened while region-b is the only healthy priority, so
+  # it connects there. The question this scenario answers is what happens to
+  # THIS connection once region-a comes back, not whether a brand new
+  # connection would pick region-a (it does; see the second client below).
+  run_harness s7-longlived 240
   sleep 10
-  echo "-- restoring region-a and letting Envoy fail back on its own --"
+  echo "-- restoring region-a and waiting for Envoy to mark it healthy again --"
   docker start cb-a-data-2 cb-a-data-3 >/dev/null
   assert_eq "s7 region-a observer recovered" "$(wait_observer 8181 UP)" "UP"
-  wait_harness s7
-  assert_eq "s7 failed back to region-a automatically" "$(envoy_health 172.28.1.10)" "healthy"
-  assert_eq "s7 traffic returned to region-a" "$(csv_regions s7)" "b a"
+  assert_eq "s7 envoy marks region-a healthy again" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
 
-  echo "-- the point: the region-b write is not in region-a --"
+  echo "-- the long-lived client's connection predates the recovery: it should NOT move --"
+  wait_harness s7-longlived
+  assert_eq "s7 long-lived client stayed on region-b" "$(csv_regions s7-longlived)" "b"
+
+  echo "-- a brand new client, opened only now, should land on region-a --"
+  run_harness s7-newclient 30
+  wait_harness s7-newclient
+  assert_eq "s7 new client landed on region-a" "$(csv_regions s7-newclient)" "a"
+
+  echo "-- the point: the region-b write is still not visible in region-a --"
   local after
   after="$(docker exec cb-a-data-1 curl -fsS -u Administrator:password \
     http://cb-a-iq-1:8093/query/service \
     --data-urlencode "statement=SELECT RAW COUNT(*) FROM \`lbtest\` USE KEYS \"$doc\"" \
     | jq -r '.results[0]')"
-  assert_eq "s7 doc ABSENT in region-a after failback" "$after" "0"
+  assert_eq "s7 doc ABSENT in region-a after recovery" "$after" "0"
 
   {
     echo "scenario 7 evidence, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "document: $doc"
     echo "count in region-b while region-b served: $before"
-    echo "count in region-a after automatic failback: $after"
+    echo "count in region-a after region-a recovered: $after"
     echo
-    echo "Envoy has no latch, so priority 0 reclaimed traffic as soon as"
-    echo "region-a recovered. Without XDCR every write taken on region-b is"
-    echo "invisible after failback. This is why manual failback is a hard"
-    echo "requirement on whatever load balancer the customer deploys."
+    echo "What happened: a long-lived client that connected to region-b"
+    echo "during the outage stayed on region-b for the rest of its life,"
+    echo "even after region-a recovered and Envoy marked it healthy again."
+    echo "A brand new client, opened at that same later moment against the"
+    echo "same load balancer, landed on region-a instead."
+    echo
+    echo "Mechanism: Envoy's L4 priority routing picks an upstream only when"
+    echo "a connection is opened. close_connections_on_host_health_failure"
+    echo "evicts connections when a host goes unhealthy, but there is no"
+    echo "equivalent eviction when a host becomes healthy again, so an"
+    echo "existing connection has no reason to move. Failover evicts."
+    echo "Failback does not."
+    echo
+    echo "Implication: recovery does not restore one shared state, it splits"
+    echo "clients by the age of their connection. Old connections keep"
+    echo "writing to region-b, new connections write to region-a, and with"
+    echo "no XDCR between the two clusters neither side ever sees the"
+    echo "other's writes. This is application-tier split-brain, not a"
+    echo "one-time stranded write, and it is why manual, coordinated"
+    echo "failback is a hard requirement on whatever load balancer the customer"
+    echo "deploys."
   } > "$OUT_DIR/s7-stranded.txt"
   echo "wrote $OUT_DIR/s7-stranded.txt"
 }
