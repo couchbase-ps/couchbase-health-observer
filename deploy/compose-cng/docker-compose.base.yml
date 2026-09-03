@@ -25,6 +25,34 @@ services:
     entrypoint: ["/bin/bash", "/scripts/init-cluster.sh"]
     restart: "no"
 
+  cng:
+    image: couchbase/cloud-native-gateway:1.2.1
+    container_name: cng-${REGION}
+    depends_on:
+      - init
+    networks:
+      cng-lb-net:
+        ipv4_address: ${CNG_IP}
+        aliases: ["cng-${REGION}"]
+    # 9091 is plain HTTP and carries /live, /ready, /health and /metrics.
+    # Published for the Task 12 readiness-latch evidence capture.
+    ports:
+      - "${CNG_WEB_HOST_PORT}:9091"
+    # --cb-host takes a SINGLE host, not a bootstrap list, which is what
+    # scenario 10 probes. --daemon retries the cluster connection every 5s at
+    # startup, which matters because the cluster takes about 90s to provision.
+    # --self-sign is replaced by a shared CA-signed cert in Task 3.
+    command:
+      - "--cb-host=${CB_PRIMARY}"
+      - "--cb-user=Administrator"
+      - "--cb-pass=password"
+      - "--data-port=18098"
+      - "--web-port=9091"
+      - "--dapi-port=-1"
+      - "--self-sign"
+      - "--daemon"
+      - "--log-level=info"
+
   observer:
     build:
       context: ../..
