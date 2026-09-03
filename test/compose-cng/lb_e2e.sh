@@ -316,10 +316,19 @@ scenario_10() {
   # product gap that does not exist. Scenario 2 stops a region-a data node
   # with CNG's bootstrap node left untouched, so its error profile is the
   # baseline for "auto-failover absorbed a node, no CNG involvement". s10 is
-  # judged against THAT baseline, not against zero: CNG is considered to
-  # have survived when its own health, Envoy's view, and the routing all say
-  # so, and the app-visible error profile is in the same ballpark as s2's,
-  # not an order of magnitude worse.
+  # judged against THAT baseline, not against zero.
+  #
+  # Round 2 fix: the genuine evidence for CNG's own survival is cng_ok, the
+  # direct probe of its own web port, plus the error profile actually
+  # comparable to s2's baseline, since that traffic ran through CNG's data
+  # path. envoy_ok and routing_ok are recorded too, but per
+  # deploy/compose-cng/envoy/envoy.yaml, Envoy's active health check targets
+  # the OBSERVER (172.28.1.11:8080), not CNG (18098), so envoy_ok is a
+  # cluster-health signal Envoy already gets from the Observer, not an
+  # independent read on CNG. Citing it as proof of CNG's health would be
+  # circular: a dead CNG in front of a healthy cluster is exactly the blind
+  # spot this scenario exists to probe, and Envoy's own health check cannot
+  # see into that blind spot at all.
   local s2_total s2_err s2_pct s2_first s2_last s2_span
   local s10_total s10_err s10_pct s10_first s10_last s10_span
   read -r s2_total s2_err s2_pct s2_first s2_last s2_span <<< "$(error_profile s2)"
@@ -349,7 +358,7 @@ scenario_10() {
     echo "scenario 10 evidence, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "Stopped cb-a-data-1, the single host named by CNG --cb-host."
     echo "observer /health/couchbase : $obs"
-    echo "CNG :9091/health HTTP code : $cngweb"
+    echo "CNG :9191/health HTTP code : $cngweb"
     echo "Envoy region-a health flag : $envoyflag"
     echo "regions served in CSV      : $regions"
     echo "harness outcome            : $summary"
@@ -367,16 +376,28 @@ scenario_10() {
     echo
     if [ "$cng_ok" = "yes" ] && [ "$envoy_ok" = "yes" ] && [ "$routing_ok" = "yes" ] && [ "$comparable" = "yes" ]; then
       echo "RESULT: CNG survived the loss of its --cb-host bootstrap node."
-      echo "Its web port kept answering 200, Envoy kept region-a healthy, and"
-      echo "traffic never left region-a. The app-visible error profile"
-      echo "(err=$s10_err/$s10_total, ${s10_pct}%, spanning ${s10_span}s) is in the same"
-      echo "range as scenario 2's ordinary absorbed-node-loss baseline"
-      echo "(err=$s2_err/$s2_total, ${s2_pct}%, spanning ${s2_span}s), which never touches"
-      echo "CNG's bootstrap node at all. That means the disruption clients saw"
-      echo "here came from the normal vbucket movement during auto-failover,"
-      echo "not from the gateway. This closes a real risk: naming a single"
-      echo "host with --cb-host does not make CNG a single point of failure"
-      echo "when that specific node goes down and auto-failover absorbs it."
+      echo "The evidence that carries the weight: CNG's own web port kept"
+      echo "answering 200 (a direct probe of CNG itself, not of the"
+      echo "cluster), and real traffic through CNG's data path showed an"
+      echo "app-visible error profile (err=$s10_err/$s10_total, ${s10_pct}%, spanning"
+      echo "${s10_span}s) in the same range as scenario 2's ordinary"
+      echo "absorbed-node-loss baseline (err=$s2_err/$s2_total, ${s2_pct}%, spanning"
+      echo "${s2_span}s), which never touches CNG's bootstrap node at all. That"
+      echo "means the disruption clients saw here came from the normal"
+      echo "vbucket movement during auto-failover, not from the gateway."
+      echo
+      echo "Envoy kept routing to region-a throughout, so this scenario"
+      echo "never had to exercise a switch, but that is a statement about"
+      echo "routing, not about CNG's health: Envoy's active health check"
+      echo "targets the Observer (172.28.1.11:8080), not CNG (18098), so"
+      echo "Envoy could not have detected a dead CNG here even if one"
+      echo "existed. That gap is exactly what this scenario probes, and it"
+      echo "is why the verdict above rests on CNG's own web port and the"
+      echo "real traffic profile, not on Envoy's view."
+      echo
+      echo "This closes a real risk: naming a single host with --cb-host"
+      echo "does not make CNG a single point of failure when that specific"
+      echo "node goes down and auto-failover absorbs it."
     else
       echo "RESULT: CNG did NOT cleanly survive the loss of its bootstrap"
       echo "node while the cluster stayed healthy. Specifics: cng_web_200=$cng_ok"
