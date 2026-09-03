@@ -464,6 +464,167 @@ scenario_8() {
   assert_le "s8 recovered inside 120s" "$win" "120000"
 }
 
+probe_cng_web() { # -> HTTP code from CNG's own web port, 5 tries/15s to ride out a transient blip
+  local code
+  for _ in 1 2 3 4 5; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9191/health)"
+    [ "$code" != "000" ] && { echo "$code"; return 0; }
+    sleep 3
+  done
+  echo "$code"
+}
+
+cng_diagnostics() { # dumps cng-a's running state and recent logs when a probe looks wrong
+  echo "-- cng-a diagnostics --"
+  docker ps -a --filter name=cng-a --format '{{.Names}} {{.Status}} {{.Ports}}' || true
+  docker logs --tail 40 cng-a 2>&1 || true
+}
+
+capture_cng_readiness() {
+  echo "== evidence: does CNG's /health latch healthy, or does it track the cluster? =="
+  # In couchbase/stellar-gateway, /ready and its alias /health read one
+  # boolean. MarkSystemHealthy() is called once at startup and
+  # MarkSystemUnhealthy() has ZERO callers on master, v1.0 and v1.1. So /ready
+  # answers "did startup complete once", not "is the backend reachable".
+  #
+  # The documentation claims the opposite: "returns HTTP 200 only when Cloud
+  # Native Gateway has connected to the Couchbase cluster, and HTTP 503
+  # otherwise".
+  #
+  # Scenario 10 already showed CNG's /health returning 200 while its
+  # --cb-host bootstrap node was down, but the cluster stayed healthy there,
+  # so it did not exercise the latch. This removes the whole region-a
+  # cluster while leaving CNG running, which is the real test, and this is
+  # the concrete answer to "why does Observer exist when CNG has a health
+  # endpoint": measured evidence, not an argument from reading source alone.
+  #
+  # This measurement can legitimately come out either way. If CNG returns
+  # 503 here against a verified healthy baseline, the latch has been fixed
+  # in this image tag and the finding is void for that version: recorded as
+  # such below, not adjusted to match the claim.
+  #
+  # A "before" reading is only meaningful against a cluster that is actually
+  # up. This function is called right after scenario_8, which deliberately
+  # ends with cb-a-data-2 and cb-a-data-3 stopped (its own switch test), so
+  # capture_cng_readiness must not trust the ambient state: it repairs
+  # region-a itself and REQUIRES the baseline to verify healthy before it
+  # takes any reading. A curl HTTP code of "000" means the connection never
+  # completed, i.e. no response was received. That is not a data point about
+  # CNG being unhealthy, it means the probe did not reach CNG at all, so it
+  # is never treated as a 503 or as any other real answer: if either the
+  # baseline or the post-outage probe comes back "000" (or anything besides
+  # 200/503), this writes NO verdict rather than an inferred one.
+  local cng_image before_obs before_cng after_obs after_cng
+
+  echo "-- restoring region-a to a known-good baseline before measuring (scenario 8 leaves it degraded) --"
+  recover_region_a
+  cng_image="$(docker inspect --format='{{.Config.Image}}' cng-a 2>/dev/null || echo unknown)"
+
+  echo "-- verifying the baseline: Observer UP and CNG /health 200 before taking any 'before' reading --"
+  before_obs="$(wait_observer 8181 UP)"
+  before_cng="$(probe_cng_web)"
+  echo "baseline: observer=$before_obs cng_web_http=$before_cng cng_image=$cng_image"
+
+  if [ "$before_obs" != "UP" ] || [ "$before_cng" != "200" ]; then
+    echo "FAIL: capture_cng_readiness: could not establish a healthy baseline (observer=$before_obs cng=$before_cng)"
+    FAIL=1
+    cng_diagnostics
+    {
+      echo "CNG readiness latch, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "CNG image tested: $cng_image"
+      echo
+      echo "MEASUREMENT FAILED: no healthy baseline could be established"
+      echo "before taking region-a's cluster down, so no verdict is drawn"
+      echo "either way in this file."
+      echo "observer baseline reading   : $before_obs (wanted UP)"
+      echo "CNG :9191/health baseline   : $before_cng (wanted 200)"
+      echo
+      echo "A code of 000 means the probe never received a response from"
+      echo "CNG (connection failure or timeout), not that CNG answered 503."
+      echo
+      echo "Re-run 'lb_e2e.sh readiness' once region-a is confirmed healthy."
+    } > "$OUT_DIR/cng-readiness-latch.txt"
+    echo "wrote $OUT_DIR/cng-readiness-latch.txt (no verdict, baseline failed)"
+    return 1
+  fi
+
+  echo "-- taking region-a's cluster down while leaving CNG running (image: $cng_image) --"
+  docker stop cb-a-data-1 cb-a-data-2 cb-a-data-3 >/dev/null
+  sleep 60
+
+  after_obs="$(curl -s http://localhost:8181/health/couchbase | jq -r '.status // "NONE"')"
+  after_cng="$(probe_cng_web)"
+  echo "observer=$after_obs cng_web_http=$after_cng cng_image=$cng_image"
+
+  assert_eq "observer reports DOWN with the cluster gone" "$after_obs" "DOWN"
+
+  if [ "$after_cng" != "200" ] && [ "$after_cng" != "503" ]; then
+    echo "FAIL: capture_cng_readiness: CNG /health returned '$after_cng' after the cluster was stopped, neither 200 nor 503"
+    FAIL=1
+    cng_diagnostics
+    {
+      echo "CNG readiness latch, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "CNG image tested: $cng_image"
+      echo
+      printf "%-34s %-12s %-12s\n" "" "cluster up" "cluster gone"
+      printf "%-34s %-12s %-12s\n" "Observer /health/couchbase" "$before_obs" "$after_obs"
+      printf "%-34s %-12s %-12s\n" "CNG :9191/health HTTP code" "$before_cng" "$after_cng"
+      echo
+      echo "MEASUREMENT FAILED after the cluster was taken down: CNG's"
+      echo "/health returned '$after_cng', which is neither 200 nor 503. That"
+      echo "is not evidence about the latch either way, a non-HTTP result"
+      echo "(such as 000) means the probe did not get a real response from"
+      echo "CNG. No verdict is drawn from this run."
+    } > "$OUT_DIR/cng-readiness-latch.txt"
+    echo "wrote $OUT_DIR/cng-readiness-latch.txt (no verdict, invalid measurement)"
+    recover_region_a
+    return 1
+  fi
+
+  assert_eq "CNG /health still reports 200 with the cluster gone (latch; a 503 here means the finding is void for $cng_image)" "$after_cng" "200"
+
+  {
+    echo "CNG readiness latch, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "CNG image tested: $cng_image"
+    echo
+    printf "%-34s %-12s %-12s\n" "" "cluster up" "cluster gone"
+    printf "%-34s %-12s %-12s\n" "Observer /health/couchbase" "$before_obs" "$after_obs"
+    printf "%-34s %-12s %-12s\n" "CNG :9191/health HTTP code" "$before_cng" "$after_cng"
+    echo
+    if [ "$after_cng" = "200" ]; then
+      echo "FINDING HOLDS for $cng_image: CNG's own health endpoint cannot"
+      echo "report unhealthy. In couchbase/stellar-gateway, /ready and its"
+      echo "alias /health read one boolean; MarkSystemHealthy() is called"
+      echo "once at startup and MarkSystemUnhealthy() has zero callers on"
+      echo "master, v1.0 and v1.1. The gRPC grpc.health.v1.Health/Check"
+      echo "service is stamped SERVING at construction and never updated."
+      echo
+      echo "The documentation states the opposite: /ready 'returns HTTP 200"
+      echo "only when Cloud Native Gateway has connected to the Couchbase"
+      echo "cluster, and HTTP 503 otherwise'."
+      echo
+      echo "Consequence: a customer who configures /ready or /health as"
+      echo "their load balancer health check gets a check that can never"
+      echo "fail, even with the entire backend cluster gone. This is the"
+      echo "justification for Observer, and the basis for asking that CNG"
+      echo "consume Observer health probes directly."
+    else
+      echo "FINDING DOES NOT HOLD for $cng_image: CNG's /health returned"
+      echo "$after_cng, not 200, with the whole region-a cluster gone against"
+      echo "a verified healthy baseline (observer UP, CNG 200 before the"
+      echo "outage). The latch described above (MarkSystemUnhealthy has zero"
+      echo "callers) does not reproduce on this image. Treat the design"
+      echo "note's claim that /ready and /health never go unhealthy as VOID"
+      echo "for $cng_image: it needs correcting, not repeating, and the"
+      echo "stellar-gateway source for the tag matching this image should"
+      echo "be re-checked before restating the claim for any other version."
+    fi
+  } > "$OUT_DIR/cng-readiness-latch.txt"
+  echo "wrote $OUT_DIR/cng-readiness-latch.txt"
+
+  recover_region_a
+}
+
 case "${1:-test}" in
   down) echo "== tearing down =="; stack_down; echo done; exit 0 ;;
   up)   stack_up; echo "== stack up, host ports: envoy 18098, admin 19901, observers 8181/8182 =="; exit "$FAIL" ;;
@@ -489,6 +650,7 @@ case "${1:-test}" in
     scenario_7
     scenario_10
     scenario_8
+    capture_cng_readiness
     if [ "$FAIL" -eq 0 ]; then echo "== ALL SCENARIOS PASSED =="; else echo "== SCENARIOS FAILED =="; fi
     exit "$FAIL"
     ;;
