@@ -23,6 +23,37 @@ Two actuators, picked by `--actuators` (`k8s`, `webhook`, `k8s,webhook`; empty =
 - No `DEGRADED` in SDK path (SDK cannot see failover state). "Don't react to transient blips" lives in the **consumer** (a delay / `FailoverDelay`), not in the health snapshot.
 - Endpoint `/health/couchbase` returns detailed JSON report; HTTP 503 when global DOWN, else 200.
 
+## CNG load-balancer stack
+
+Observer = passive sensor here: observe-only, no actuators. **Envoy owns switch decision**, incl. debounce. Traffic -> CNG; health check -> **Observer**, via `health_check_config.address`, literal IP only, no DNS. Hence pinned static subnet.
+
+Four Envoy settings default wrong for this use case:
+- `retriable_statuses` must cover **503**, else unexpected status bypasses `unhealthy_threshold`, sustained-down window is no-op.
+- `Cluster.close_connections_on_host_health_failure: true`, else SDK's established gRPC channel survives dead upstream, nothing fails over.
+- `fail_traffic_on_panic: true`, else dual outage routes to hosts already known unhealthy.
+- health-check `timeout` must exceed Observer's probe timeout: **4s here, not 2s as planned**. At 2s Observer's 503 never arrives; Envoy infers health from latency instead of reading the verdict, turning a slow-but-healthy Observer into a false failover.
+
+Measured, reproducible from suite:
+- 1 data node lost, absorbed: 5.1s gap, no switch.
+- 2 data nodes lost: 26.4s gap, switch at ~+91s (Observer alive, 503 path).
+- whole region gone: 119.0s gap, switch at ~+129s (Observer dead, connection-failure path). Slower to detect AND ~4.5x worse than the 2-node case: dead host gives no TCP RST, every check burns full timeout, no partial service left to mask the gap.
+- both regions down: prompt failure, max latency ~2s, zero hangs.
+- idle client: idle gRPC channel survives Envoy's 3600s idle timeout.
+
+Findings that changed the design's conclusions:
+- **Existing connections do not fail back.** Envoy L4 priority routing steers new connections only; `close_connections_on_host_health_failure` evicts on unhealthy, has no healthy-again equivalent. Post-recovery: long-lived clients stay on secondary, new ones go primary. Both clusters serve different clients at once, diverge by connection age.
+- **CNG's own `/health` cannot report unhealthy.** Measured 200 with all 5 region-a nodes stopped, on `couchbase/cloud-native-gateway:1.2.1`, while Observer reported DOWN. `MarkSystemUnhealthy()` has zero callers in `couchbase/stellar-gateway`. Couchbase docs claim the opposite. Repro cheap: `test/compose-cng/lb_e2e.sh readiness`.
+
+Closed open risks:
+- standalone CNG runs against Couchbase 8.0.1, no extra flags.
+- CNG survives losing the single node named by `--cb-host`.
+
+LB capability checklist, derived from what Envoy actually needed: health-check an arbitrary address; close established connections when a member goes unhealthy; no automatic failback; health-check timeout above the Observer's probe timeout. Note: an LB health-checking the Observer CANNOT detect a dead gateway, because the Observer reports on the cluster, not the gateway.
+
+Auto-failover stays `timeout=30, maxCount=100`. `maxCount` is not the discriminator: quorum and replica checks are. `timeout=5` breaks `test/compose/e2e.sh`.
+
+Design and plan: `delivery vault, CNG design and plan` and `... plan.md`.
+
 ## Layout
 
 ```text
@@ -34,6 +65,8 @@ charts/couchbase-health-observer/  observer Helm chart. Single source of truth f
 hack/render-manifests.sh          regenerates deploy/k8s from the chart. deploy/k8s is GENERATED, never hand-edit. ci.yml `chart` job fails on drift.
 deploy/kind/          kind + official Couchbase Helm switch stack (mock-app in default, mock-app-b in app-b, webhook-receiver for scenario E). Observer itself installs from the chart with values-examples/kind.yaml.
 deploy/aws/           distributed-quorum AWS aggregation infra (Terraform): monitoring TG + quorum alarm + SNS
+deploy/compose-cng/   CNG load-balancer stack: 2 regions (cng-a 5 nodes replica 1, cng-b 1 node replica 0) on shared net cng-lb-net 172.28.0.0/16, standalone CNG 1.2.1 per region, Envoy L4 passthrough, shared-SAN certs
+harness/              Java SDK availability harness (couchbase2://), CSV per op with region marker
 test/<stack>/         per-stack tests, each independently runnable: test/compose, test/kind, test/aws, test/helm (chart lint+render, no cluster)
 HANDOFF.md            running progress log — READ THIS to see what is done and what is next
 ```
@@ -66,6 +99,8 @@ docker compose -f deploy/compose/docker-compose.yml up -d   # ~90s to init + loa
 go test -tags=integration ./...
 go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve /health/couchbase
 test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
+test/compose-cng/lb_e2e.sh                     # CNG LB failover: 9 scenarios + CNG readiness evidence
+test/compose-cng/lb_e2e.sh up                  # bring the LB stack up for a manual demo
 ```
 
 `--log-level trace|debug|info|warn|error` (default `info`). Human-readable lines via a custom slog handler (`pkg/obslog` `NewHuman`): `HH:mm:ss.SSS LEVEL <component> <prose>` (components: observer/health/failover/actuator/cluster/probe/webhook). Events + levels + attrs unchanged, so a JSON handler is a later drop-in swap. INFO=state changes+switch actions; DEBUG=per-tick cluster detail; TRACE=per-endpoint ping. Events: `startup`, `active_config`, `adopt_switched`, `adopt_mixed`, `target_namespace_unpaired`, `liveness_window_tight`, `probe`, `health`, `cluster_detail`, `cluster_nodes`, `cluster_map[_change]`, `failover_countdown_start`, `switch_required/held/skipped`, `secondary_connect_failed`, `probe_target`, `probe_target_held`, `probe_target_unavailable`, `configmap_patch`, `deployment_roll`, `roll_only`, `roll_skipped`, `switched`, `switch_noop`, `actuation_error`, `webhook_target`, `webhook_called`, `webhook_retry`, `webhook_failed`, `webhook_dropped`, `webhook_dry_run`, `webhook_body`, `webhook_insecure`, `webhook_window_tight`, `mode_deprecated`.
@@ -78,8 +113,9 @@ Switch latch follows whatever actuator can actually move the apps: k8s enabled -
 CI: `ci.yml` fast gate (fmt/vet/build/unit + terraform) runs on PRs + is
 `workflow_call`ed by publish/release. `e2e.yml` runs GitHub-safe e2e in parallel
 on PRs (all green, blocking, on ubuntu-latest): compose e2e, compose TLS e2e,
-kind switch-lambda, kind region-switch. AWS e2e (`test/aws/*`) NOT in CI (needs
-real AWS / LocalStack).
+kind switch-lambda, kind region-switch, compose-cng-lb-e2e (45min timeout,
+uploads `/tmp/cng-lb-out` as artifact `cng-lb-output` always). AWS e2e
+(`test/aws/*`) NOT in CI (needs real AWS / LocalStack).
 
 ## Source design docs (Obsidian vault)
 

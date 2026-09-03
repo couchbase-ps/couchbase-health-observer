@@ -4,50 +4,27 @@ Running progress so any agent (or human) can continue. Newest entry on top. Upda
 
 ## CNG load-balancer stack
 
-- Task 1 done: shared network `cng-lb-net` (172.28.0.0/16), two-region compose
-  stack (`cng-a` 5 nodes replica 1, `cng-b` 1 node replica 0), bucket `lbtest`,
-  region marker doc, observe-only Observer per region on host ports 8181/8182.
-  Next: Task 2, standalone CNG per region.
-- Task 7 done: `test/compose-cng/lib.sh` + `lb_e2e.sh` (scenarios 1 to 3).
-  Also fixed a real defect found by the first scenario 3 run:
-  region-b's single node raced data, index and query startup, so
-  `create_index_and_marker` in `init-cluster.sh` could hit
-  `CREATE PRIMARY INDEX` before the index service was ready, get HTTP 500,
-  and die under `set -euo pipefail` before writing `region::marker` at all.
-  That is a silent init failure, not a scenario failure: the switch still
-  happened, the harness just could not attribute it. Fixed by retrying both
-  the index creation and the marker upsert with backoff, and verifying the
-  marker reads back before init exits. `stack_up` now also asserts
-  `region::marker` is readable in both regions before any scenario runs, so a
-  missing marker fails setup loudly instead of degrading into
-  "unattributed".
-- Task 7 correction (same day, review round 1): an earlier note here claimed
-  `recover_region_a` "server-adds and rebalances a node auto-failover
-  removed", which was never true and was never actually exercised, because
-  its membership check (`grep` for the hostname string in `pools/default`)
-  cannot tell "active" apart from "inactiveFailed". Couchbase auto-failover
-  marks a node `inactiveFailed` but LEAVES it listed in `pools/default`; only
-  an explicit rebalance-out removes it. The grep always matched, so the
-  helper always logged "already has all 5 nodes" and never repaired
-  anything, on either run. `recover_region_a` now parses `clusterMembership`
-  with `jq` and repairs the two cases correctly: absent -> `server-add`,
-  present but not `active` -> `couchbase-cli recovery --recovery-type full`,
-  either way followed by one `rebalance`, then verifies all five nodes are
-  `active` and fails loudly if not. Confirmed by direct log evidence: it
-  detected `cb-a-data-2` as `inactiveFailed` in scenario 2, ran the recovery,
-  and rebalanced. `csv_error_window_ms` also had a second real defect: it
-  only measured gaps between two `ok` rows, missing a leading or trailing
-  outage entirely. Fixed to bound the run by its first and last row
-  timestamps, so a leading or trailing all-error stretch is measured too.
-  `retry_until` in `init-cluster.sh` now surfaces the last failing attempt's
-  output on a `FATAL` exit instead of discarding it, and the re-add wait for
-  a genuinely absent node is now bounded (180s) rather than infinite.
-  Re-ran the full suite under the corrected topology: still `s2` no switch
-  (true availability gap ~5070ms), still `s3` switch fires (true gap
-  ~26372ms), both within noise of the earlier, topologically-wrong run. The
-  scenario 2/3 discriminator held regardless, but that is not something the
-  earlier, silently-no-op `recover_region_a` had actually proven. Next:
-  Task 8.
+Done, Tasks 1 to 13. `test/compose-cng/lb_e2e.sh` runs scenarios 1 to 8 and 10
+plus the CNG readiness capture, and is wired into `e2e.yml` as
+`compose-cng-lb-e2e` (45 min timeout, uploads `/tmp/cng-lb-out`).
+
+Artifacts each run produces in `/tmp/cng-lb-out`:
+- `s*.csv` per-operation availability with the serving region per line
+- `s7-stranded.txt` writes lost to auto-failback
+- `s10-cng-bootstrap.txt` whether CNG survives losing its `--cb-host` node
+- `cng-readiness-latch.txt` CNG 200 versus Observer 503 with the cluster gone
+
+Not done, deliberately:
+- **Scenario 9, DNS flip against a live gRPC channel.** Deprioritized by Tayeb.
+  Matters because Akamai GTM is DNS-only and cannot evict established
+  connections, so it would likely fail scenario 3 entirely.
+- **Phase 2, kind plus Operator-shipped CNG.** Differences to expect: CNG is a
+  sidecar in every Couchbase Server pod, gRPC on 443 not 18098,
+  Operator-generated cert secrets, port 9091 reachable on the pod IP only, and
+  `spec.networking.cloudNativeGateway` flagged developer preview.
+- **Quorum aggregation across multiple Observers.** Envoy cluster health is an
+  OR, so more Observers per region would make detection worse, not better.
+- **Manual failback.** Envoy cannot do it; needs an xDS control plane.
 
 ## Health follows ACTIVE cluster after switch (2026-08-26, #38)
 
