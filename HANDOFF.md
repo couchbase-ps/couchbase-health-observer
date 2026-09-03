@@ -2,6 +2,13 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## CNG load-balancer stack
+
+- Task 1 done: shared network `cng-lb-net` (172.28.0.0/16), two-region compose
+  stack (`cng-a` 5 nodes replica 1, `cng-b` 1 node replica 0), bucket `lbtest`,
+  region marker doc, observe-only Observer per region on host ports 8181/8182.
+  Next: Task 2, standalone CNG per region.
+
 ## Health follows ACTIVE cluster after switch (2026-08-26, #38)
 
 Regression fix, rebased on webhook #31 + multi-ns #32. Post-switch/post-adopt

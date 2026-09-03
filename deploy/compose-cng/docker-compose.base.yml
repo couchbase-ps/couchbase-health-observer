@@ -1,0 +1,53 @@
+# Base services for one region of the CNG load-balancer stack. Combined with
+# docker-compose.region-a.yml or docker-compose.region-b.yml, and driven by
+# env/region-<x>.env, so one file serves both regions.
+#
+#   docker compose -p cng-a --env-file env/region-a.env \
+#     -f docker-compose.base.yml -f docker-compose.region-a.yml up -d
+services:
+  init:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-${REGION}-init
+    networks:
+      cng-lb-net:
+    environment:
+      REGION: ${REGION}
+      CB_PRIMARY: ${CB_PRIMARY}
+      CB_PRIMARY_SERVICES: ${CB_PRIMARY_SERVICES}
+      CB_DATA_NODES: ${CB_DATA_NODES}
+      CB_QUERY_NODES: ${CB_QUERY_NODES}
+      CB_BUCKET: ${CB_BUCKET}
+      CB_BUCKET_REPLICAS: ${CB_BUCKET_REPLICAS}
+      COUCHBASE_USERNAME: Administrator
+      COUCHBASE_PASSWORD: password
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/bash", "/scripts/init-cluster.sh"]
+    restart: "no"
+
+  observer:
+    build:
+      context: ../..
+    container_name: cb-${REGION}-observer
+    depends_on:
+      - init
+    networks:
+      cng-lb-net:
+        ipv4_address: ${OBS_IP}
+    ports:
+      - "${OBS_HOST_PORT}:8080"
+    # Observe only. No --actuators and no --secondary-conn: the load balancer
+    # owns the switch decision, and two actuation paths could not be attributed.
+    command:
+      - "--conn=couchbase://${CB_PRIMARY}"
+      - "--bucket=${CB_BUCKET}"
+      - "--user=Administrator"
+      - "--pass=password"
+      - "--critical=kv"
+      - "--addr=:8080"
+      - "--interval=2s"
+      - "--log-level=info"
+
+networks:
+  cng-lb-net:
+    external: true

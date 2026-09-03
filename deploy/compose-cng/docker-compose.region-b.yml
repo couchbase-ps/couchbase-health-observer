@@ -1,0 +1,26 @@
+# region-b: one node running data, index and query, bucket replica 0. It runs
+# the query service because the harness issues SQL++ and must keep working
+# after the switch.
+#
+# hostname/aliases carry both the short form (env contract, observer conn
+# string, Step 10 docker exec targets) and a ".local" FQDN form (only
+# couchbase-cli node-init needs it: Couchbase 8.0.1 refuses a dot-less
+# --node-init-hostname). See docker-compose.region-a.yml for the fuller note.
+services:
+  cb-b-node-1:
+    image: couchbase:enterprise-8.0.1
+    container_name: cb-b-node-1
+    hostname: cb-b-node-1.local
+    networks:
+      cng-lb-net:
+        ipv4_address: 172.28.2.21
+        aliases: ["cb-b-node-1", "cb-b-node-1.local"]
+    ports: ["8291:8091"]
+    volumes: ["cb-b-node-1:/opt/couchbase/var"]
+
+  init:
+    depends_on:
+      - cb-b-node-1
+
+volumes:
+  cb-b-node-1:
