@@ -81,8 +81,12 @@ jobs:
     runs-on: ubuntu-latest
     # Two Couchbase clusters, two CNG containers, Envoy and a Maven build, plus
     # scenarios that each wait out a 60s health-check window. Slower than every
-    # other job here.
-    timeout-minutes: 45
+    # other job here: the scenario phase alone measured 31.3 minutes on a
+    # developer Mac, mostly fixed sleeps plus stack_up's six Couchbase nodes,
+    # a Maven build and a Go build. 60 minutes leaves headroom above that for
+    # a slower CI runner; this job is otherwise unvalidated until its first
+    # green PR run.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - name: CNG load-balancer failover e2e
