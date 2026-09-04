@@ -110,6 +110,10 @@ assert_marker() {
 
 stack_up() {
   stack_down
+  # Otherwise an uploaded artifact mixes runs: a stale CSV or evidence file
+  # left over from an earlier, possibly abandoned run would ship next to this
+  # run's fresh output with no indication it is not current.
+  rm -rf "$OUT_DIR"
   mkdir -p "$OUT_DIR"
   "$CNG_DIR/net.sh" up
   "$CNG_DIR/scripts/make-certs.sh"
@@ -124,9 +128,8 @@ stack_up() {
   assert_eq "region-b marker readable" "$(assert_marker cb-b-node-1 cb-b-node-1)" "b"
   $COMPOSE_LB up -d
   echo "== waiting for Envoy to health-check both priorities =="
-  sleep 20
-  assert_eq "envoy region-a baseline" "$(envoy_health 172.28.1.10)" "healthy"
-  assert_eq "envoy region-b baseline" "$(envoy_health 172.28.2.10)" "healthy"
+  assert_eq "envoy region-a baseline" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
+  assert_eq "envoy region-b baseline" "$(wait_envoy_healthy 172.28.2.10)" "healthy"
 }
 
 # run_harness <csv name> <seconds> [extra -e KEY=VALUE pairs...]
