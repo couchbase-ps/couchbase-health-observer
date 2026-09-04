@@ -134,9 +134,14 @@ configure_autofailover() {
   # and replica checks refuse the second failover regardless of the count, which
   # is exactly what scenario 3 relies on. maxCount 100 also matches Capella.
   echo "Configuring auto-failover (timeout=30, maxCount=100)..."
+  # No "|| true" here: this is the precondition that gives scenarios 2, 3 and
+  # 10 their meaning (auto-failover absorbing a single node, refusing a
+  # second). Swallowing a failure here would leave the cluster on defaults and
+  # make those scenarios measure something else, silently. set -euo pipefail
+  # at the top of this script is what we want to fire if the POST fails.
   curl -kfsS -u "${USERNAME}:${PASSWORD}" -X POST \
     "${SECURE_URL}/settings/autoFailover" \
-    -d enabled=true -d timeout=30 -d maxCount=100 >/dev/null || true
+    -d enabled=true -d timeout=30 -d maxCount=100 >/dev/null
 }
 
 create_bucket() {

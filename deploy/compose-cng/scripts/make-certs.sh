@@ -69,3 +69,8 @@ chmod 644 "$OUT/server.key" "$OUT/server.crt" "$OUT/ca.crt"
 
 rm -f "$OUT/server.csr"
 echo "wrote $OUT/ca.crt $OUT/server.crt $OUT/server.key"
+if [ "$FORCE" = "--force" ]; then
+  echo "WARNING: CNG loads its certificate once at startup and does not watch"
+  echo "the file for changes. Restart cng-a and cng-b now, or they will keep"
+  echo "serving the old certificate."
+fi

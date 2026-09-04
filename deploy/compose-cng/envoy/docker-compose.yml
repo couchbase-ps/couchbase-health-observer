@@ -4,7 +4,10 @@
 #   docker compose -p cng-lb -f docker-compose.yml up -d
 services:
   envoy:
-    image: envoyproxy/envoy:v1.31-latest
+    # Pinned exactly, not "v1.31-latest": this suite exists to produce
+    # reproducible figures, and a floating tag can change the numbers between
+    # runs with no record of why.
+    image: envoyproxy/envoy:v1.31.10
     container_name: cng-envoy
     networks:
       cng-lb-net:
