@@ -36,7 +36,7 @@ Four Envoy settings default wrong for this use case:
 Measured, reproducible from suite:
 - 1 data node lost, absorbed: 5.1s gap, no switch.
 - 2 data nodes lost: 26.4s gap, switch at ~+91s (Observer alive, 503 path).
-- whole region gone: 119.0s gap, switch at ~+129s (Observer dead, connection-failure path). Slower to detect AND ~4.5x worse than the 2-node case: dead host gives no TCP RST, every check burns full timeout, no partial service left to mask the gap.
+- whole region gone: 103 to 119s gap across 4 runs, switch at +113 to +129s (Observer dead, connection-failure path). Slower to detect AND roughly 4x worse than the 2-node case: dead host gives no TCP RST, every check burns full timeout, no partial service left to mask the gap.
 - both regions down: prompt failure, max latency ~2s, zero hangs.
 - idle client: idle gRPC channel survives Envoy's 3600s idle timeout.
 
