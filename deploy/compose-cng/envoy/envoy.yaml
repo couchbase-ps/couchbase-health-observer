@@ -47,9 +47,15 @@ static_resources:
     common_lb_config:
       # healthy_panic_threshold defaults to 50 percent, and in panic mode Envoy
       # disregards health status and routes to hosts it knows are unhealthy. On a
-      # dual outage that means the SDK is sent to a dead cluster instead of
-      # failing fast. fail_traffic_on_panic makes Envoy fail the requests
-      # instead, which is both better for the app and legible in the CSV.
+      # dual outage that means new connections get proxied into a dead cluster
+      # instead of refused outright. fail_traffic_on_panic makes Envoy refuse
+      # those connections instead, which is both cleaner for the app and
+      # legible in the CSV: it stops garbage being proxied into a dead
+      # backend. Scenario 5 confirms the resulting operations still fail
+      # cleanly with zero hangs, but does NOT show this makes client-visible
+      # errors arrive faster than the SDK's own operation timeout: every
+      # measured KV op there still took the full ~2s KV timeout to surface as
+      # an error.
       healthy_panic_threshold: { value: 50 }
       zone_aware_lb_config:
         fail_traffic_on_panic: true
