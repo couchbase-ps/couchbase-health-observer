@@ -36,17 +36,18 @@ Four Envoy settings default wrong for this use case:
 Measured, reproducible from suite:
 - 1 data node lost, absorbed: 5.1s gap, no switch.
 - 2 data nodes lost: 26.4s gap, switch at ~+91s (Observer alive, 503 path).
-- whole region gone: 103 to 120s gap across 6 runs, switch at +113 to +129s across 2 runs (Observer dead, connection-failure path). Slower to detect AND roughly 4x worse than the 2-node case: dead host gives no TCP RST, every check burns full timeout, no partial service left to mask the gap.
-- both regions down: prompt failure, max latency ~2s, zero hangs.
-- idle client: idle gRPC channel survives Envoy's 3600s idle timeout.
+- whole region gone: 103 to 120s gap across 6 runs (driver-emitted, `csv_error_window_ms`), switch at +113 to +129s across 2 runs (Observer dead, connection-failure path). Slower AND ~4x worse than 2-node case: dead host gives no TCP RST, every check burns full timeout, no partial service masks the gap. Switch-time figure, unlike gap figure, NOT driver-emitted: manual offset from harness start, unverified run-by-run. Recompute from shipped CSVs gives s4 +112s, just outside band -> undocumented derivation (offset from harness start vs node stop). Treat as approximate pending a driver-emitted version.
+- both regions down: clean failure bounded by 2s KV timeout (every op takes the full ~2s to surface as error), zero hangs.
+- idle client: 60s idle gap produces no errors on resume. 3600s Envoy idle timeout itself NOT exercised (60s = 1.7% of that window).
+- harness `OPS_PER_SEC=20` paces loop iterations, not CSV rows: each iteration emits a `get` AND an `upsert` KV row, so realized CSV throughput is ~2x the config value, ~34-40 ops/sec, not 20.
 
 Findings that changed the design's conclusions:
 - **Existing connections do not fail back.** Envoy L4 priority routing steers new connections only; `close_connections_on_host_health_failure` evicts on unhealthy, has no healthy-again equivalent. Post-recovery: long-lived clients stay on secondary, new ones go primary. Both clusters serve different clients at once, diverge by connection age.
-- **CNG's own `/health` cannot report unhealthy.** Measured 200 with all 5 region-a nodes stopped, on `couchbase/cloud-native-gateway:1.2.1`, while Observer reported DOWN. `MarkSystemUnhealthy()` has zero callers in `couchbase/stellar-gateway`. Couchbase docs claim the opposite. Repro cheap: `test/compose-cng/lb_e2e.sh readiness`.
+- **CNG's own `/health` cannot report unhealthy.** Measured 200 with all 5 region-a nodes stopped, on `couchbase/cloud-native-gateway:1.2.1`, while Observer reported DOWN. `MarkSystemUnhealthy()` has zero callers in `couchbase/stellar-gateway` on master/v1.0/v1.0.1 (only tags that repo has); 1.2.1 source itself NOT inspected, so mechanism is inferred from those branches, not confirmed for the measured image. Couchbase docs claim the opposite. Repro cheap: `test/compose-cng/lb_e2e.sh readiness`.
 
 Closed open risks:
 - standalone CNG runs against Couchbase 8.0.1, no extra flags.
-- CNG survives losing the single node named by `--cb-host`.
+- CNG survives losing the single node named by `--cb-host`, specifically when auto-failover absorbs that node's loss (not tested against a refused failover).
 
 LB capability checklist, derived from what Envoy actually needed: health-check an arbitrary address; close established connections when a member goes unhealthy; no automatic failback; health-check timeout above the Observer's probe timeout. Note: an LB health-checking the Observer CANNOT detect a dead gateway, because the Observer reports on the cluster, not the gateway.
 
@@ -99,7 +100,7 @@ docker compose -f deploy/compose/docker-compose.yml up -d   # ~90s to init + loa
 go test -tags=integration ./...
 go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve /health/couchbase
 test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
-test/compose-cng/lb_e2e.sh                     # CNG LB failover: 9 scenarios + CNG readiness evidence
+test/compose-cng/lb_e2e.sh                     # CNG LB failover: scenarios 1-8 + 10 (9 deferred) + CNG readiness evidence
 test/compose-cng/lb_e2e.sh up                  # bring the LB stack up for a manual demo
 ```
 
@@ -113,8 +114,9 @@ Switch latch follows whatever actuator can actually move the apps: k8s enabled -
 CI: `ci.yml` fast gate (fmt/vet/build/unit + terraform) runs on PRs + is
 `workflow_call`ed by publish/release. `e2e.yml` runs GitHub-safe e2e in parallel
 on PRs (all green, blocking, on ubuntu-latest): compose e2e, compose TLS e2e,
-kind switch-lambda, kind region-switch, compose-cng-lb-e2e (45min timeout,
-uploads `/tmp/cng-lb-out` as artifact `cng-lb-output` always). AWS e2e
+kind switch-lambda, kind region-switch, compose-cng-lb-e2e (60min timeout,
+uploads `/tmp/cng-lb-out` as artifact `cng-lb-output` always; unvalidated
+until its first green PR run). AWS e2e
 (`test/aws/*`) NOT in CI (needs real AWS / LocalStack).
 
 ## Source design docs (Obsidian vault)
