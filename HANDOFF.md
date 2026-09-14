@@ -425,4 +425,8 @@ best effort, not a product release.
   `oci://ghcr.io/couchbase-ps/charts` (GHCR package names are unique per org and the bare
   name is the image, hence the `charts` subpath), and uploads the `.tgz` to the release.
   Workflow permissions now include `packages: write`.
-- Next: step 10, docs (chart README, root README, docs/DEPLOYMENT.md, deploy/k8s/README.md).
+- Step 10 done: chart README (support status, install by OCI and tgz, full values table,
+  credentials, TLS, RBAC derivation), plus a Helm section in README.md, Helm as the first
+  install path in docs/DEPLOYMENT.md, and a generated-file warning in deploy/k8s/README.md.
+- Remaining: open the PR, merge, tag v0.5.0, verify image + OCI chart + tgz publish, then
+  Tayeb emails Emirates the install details.

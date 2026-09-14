@@ -2,6 +2,23 @@
 
 Answers: *how is the Observer deployed, how is it wired, what does it need?*
 
+## Install path
+
+Helm is the primary path:
+
+```bash
+helm install observer oci://ghcr.io/couchbase-ps/charts/couchbase-health-observer \
+  --version X.Y.Z --namespace observer --create-namespace --values my-values.yaml
+```
+
+Values reference, credential handling, TLS mounts and RBAC derivation:
+[../charts/couchbase-health-observer/README.md](../charts/couchbase-health-observer/README.md).
+A packaged `.tgz` hangs off each GitHub release for pipelines that cannot pull OCI charts.
+
+`kubectl apply -f deploy/k8s/observer.yaml` stays supported for teams that do not use
+Helm. That file is **generated** from the chart by `hack/render-manifests.sh`, and CI
+fails when it drifts, so change the chart and regenerate rather than editing it.
+
 ## Architecture
 
 A single-replica `Deployment` (`deploy/k8s/observer.yaml`) runs the observer in
@@ -26,19 +43,21 @@ unreachable, re-checked every period.
 ## Prerequisites
 - A `cb-conn` ConfigMap with key `connstring` in every target namespace.
 - The dependent app(s) read `cb-conn` and reconnect on rollout restart.
-- Image pullable: `ghcr.io/couchbase-ps/couchbase-health-observer:latest` (public).
+- Image pullable: `ghcr.io/couchbase-ps/couchbase-health-observer` (public). Pin the tag;
+  the chart pins it to the chart `appVersion` for you.
 
 ## RBAC
 `ServiceAccount` plus a `ClusterRole` holding `get/update` on ConfigMaps and Deployments,
 bound by one `RoleBinding` per target namespace. The production manifest is
 `deploy/k8s/observer.yaml`; it ships the `ClusterRole` and one `RoleBinding`, in
-`default`. (`deploy/kind/observer/rbac.yaml` is the same shape for the kind test stack,
-bound in `default` and `app-b`.) The verbs match the only calls `pkg/actuator` makes: Get
+`default`. (The chart derives the binding set from the targets, so the kind values file
+with two target namespaces renders bindings in `default` and `app-b`.) The verbs match the only calls `pkg/actuator` makes: Get
 and Update on both resources. The observer can only touch the namespaces it is bound in,
 so an unlisted namespace stays unreachable even if a target names it.
 
-**Adding a target namespace means adding a `RoleBinding` for it** in
-`deploy/k8s/observer.yaml`: same `roleRef` (the `observer` `ClusterRole`), same subject
+**Adding a target namespace** with Helm means nothing extra: name the target in
+`targets.configmaps` or `targets.deployments` and the binding follows. Without Helm, add
+the `RoleBinding` by hand in `deploy/k8s/observer.yaml`: same `roleRef` (the `observer` `ClusterRole`), same subject
 (the `observer` `ServiceAccount` in `default`), `metadata.namespace` set to the new
 namespace. Without it every Get in that namespace returns `forbidden` for the whole
 outage. Teams that add namespaces often can swap the per-namespace bindings for a single

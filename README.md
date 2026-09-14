@@ -87,6 +87,27 @@ only). Tagging a `vX.Y.Z` release also generates the changelog and a GitHub rele
 > The package is private until you set it public (repo → Packages → package settings →
 > change visibility), which is needed for pulls from outside the org (e.g. the EKS demo).
 
+## Helm chart
+
+The observer also ships as a Helm chart, published on every `vX.Y.Z` tag. Chart version,
+`appVersion` and image tag move together, so one number describes the whole artifact.
+
+```
+helm install observer oci://ghcr.io/couchbase-ps/charts/couchbase-health-observer \
+  --version X.Y.Z --namespace observer --create-namespace --values my-values.yaml
+```
+
+The packaged `.tgz` is attached to the GitHub release for pipelines that cannot pull OCI
+charts. Full values reference and the credential, TLS and RBAC behaviour:
+[charts/couchbase-health-observer/README.md](charts/couchbase-health-observer/README.md).
+
+`deploy/k8s/*.yaml` remain for non-Helm users, but they are **generated** from the chart
+by `hack/render-manifests.sh` and CI fails when they drift. Edit the chart, never those
+files.
+
+Support status: the observer is a Couchbase **Delivery team** artifact, maintained on a
+best-effort basis. It is not a product release and is not covered by product support.
+
 ## Observer health & observability
 
 The observer serves three **separate** signals — never conflate them:
@@ -183,9 +204,9 @@ Set `GOCB_VERBOSE=1` to enable verbose gocb logging.
 
 With the `k8s` actuator the Kubernetes client uses `KUBECONFIG` if set (local / kind), otherwise
 in-cluster config. The observer ServiceAccount needs `get`/`update` on `configmaps` and
-`deployments` in every target namespace. `deploy/kind/observer/rbac.yaml` ships a
-`ClusterRole` plus one `RoleBinding` per target namespace; see `docs/DEPLOYMENT.md` for the
-cluster-wide alternative.
+`deployments` in every target namespace. The chart renders a `ClusterRole` plus one
+`RoleBinding` per target namespace, derived from the `--configmap` and `--deployments`
+targets; see `docs/DEPLOYMENT.md` for the cluster-wide alternative.
 
 ## Manual testing — Docker Compose (observe mode)
 
@@ -272,7 +293,8 @@ done
 
 # 5. Deploy the mock app and the active observer
 kubectl apply -k deploy/kind/mock-app
-kubectl apply -k deploy/kind/observer
+helm upgrade --install observer charts/couchbase-health-observer \
+  --values charts/couchbase-health-observer/values-examples/kind.yaml --wait --timeout 3m
 kubectl rollout status deployment/observer --timeout=2m
 
 # Baseline: the app's ConfigMap points at region-a
@@ -348,10 +370,13 @@ pkg/switchhandler/    actuate the switch only on ALARM, reusing pkg/actuator (sw
 cmd/svchealthcheck/   server + active control loop
 cmd/switch-lambda/    SNS-triggered Lambda for the distributed-quorum path
 deploy/compose/       5-node Couchbase EE 8.0.1 compose harness (compose detector stack)
-deploy/kind/          kind cluster, official Couchbase Helm chart wrapper, mock app, observer (kind switch stack)
+charts/couchbase-health-observer/  the observer Helm chart (deploy/k8s is generated from it)
+hack/render-manifests.sh          regenerate deploy/k8s from the chart
+deploy/kind/          kind cluster, official Couchbase Helm chart wrapper, mock app fixtures (kind switch stack)
 deploy/aws/           distributed-quorum AWS aggregation: monitoring target group + quorum alarm + SNS (Terraform)
 deploy/aws/lambda/    switch Lambda Terraform (SNS subscription + IAM + optional VPC)
 test/compose/         compose stack e2e
+test/helm/            chart lint + render assertions (no cluster needed)
 test/kind/            kind stack render + switch + switch-lambda e2e
 test/aws/             aws stack localstack + real-account scripts
 HANDOFF.md            running build/handoff log
