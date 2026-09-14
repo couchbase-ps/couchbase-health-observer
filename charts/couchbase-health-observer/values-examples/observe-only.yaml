@@ -1,0 +1,11 @@
+# Passive sensor: serve /health/couchbase and the metrics, actuate nothing.
+# No RBAC is rendered, because the observer touches no Kubernetes object.
+# Use this when a load balancer or an external pipeline owns the switch decision.
+fullnameOverride: observer
+
+actuators: ""
+
+couchbase:
+  connString: couchbase://region-a-srv.region-a.svc
+  bucket: observer
+  criticalServices: kv

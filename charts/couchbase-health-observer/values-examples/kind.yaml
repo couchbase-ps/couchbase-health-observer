@@ -1,0 +1,25 @@
+# kind end-to-end stack: locally built image, two target namespaces, fast timers.
+fullnameOverride: observer
+
+image:
+  tag: dev
+  pullPolicy: Never
+
+actuators: k8s
+
+couchbase:
+  connString: couchbase://region-a-srv.region-a.svc
+  secondaryConnString: couchbase://region-b-srv.region-b.svc
+  bucket: observer
+  criticalServices: kv
+
+detector:
+  interval: 2s
+  failoverDelay: 30s
+  logLevel: debug
+
+targets:
+  namespace: default
+  configmaps: cb-conn,app-b/cb-conn
+  configKey: connstring
+  deployments: mock-app,app-b/mock-app-b

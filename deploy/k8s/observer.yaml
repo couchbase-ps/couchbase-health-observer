@@ -1,25 +1,53 @@
-# Centralized Kubernetes Observer (active mode): watches the primary Couchbase
-# cluster and, on a sustained critical outage, repoints the cb-conn ConfigMap to
-# the secondary and rolls the dependent app Deployments.
+# GENERATED FILE. Do not edit.
+# Source: charts/couchbase-health-observer + values-examples/actuator.yaml
+# Regenerate: hack/render-manifests.sh
 #
 # PROBE WIRING (do NOT change): livenessProbe -> /healthz (loop alive),
 # readinessProbe -> /readyz (K8s API reachable). NEVER point either probe at
 # /health/couchbase: a real Couchbase outage would then restart the observer
 # exactly when it must act.
+---
+# Source: couchbase-health-observer/templates/serviceaccount.yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: observer
   namespace: default
+  labels:
+    helm.sh/chart: couchbase-health-observer-0.5.0
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
+    app.kubernetes.io/version: "0.5.0"
 ---
-# One ClusterRole holds the verbs; a RoleBinding per target namespace grants them
-# there only. An unlisted namespace stays unreachable even if a target names it.
-# Verbs match the only calls pkg/actuator makes: Get and Update on both resources.
-# Targeting a further namespace means adding one more RoleBinding for it.
+# Source: couchbase-health-observer/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: observer-credentials
+  namespace: default
+  labels:
+    helm.sh/chart: couchbase-health-observer-0.5.0
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
+    app.kubernetes.io/version: "0.5.0"
+type: Opaque
+stringData:
+  username: "Administrator"
+  password: "password"
+---
+# Source: couchbase-health-observer/templates/rbac.yaml
+# One ClusterRole holds the verbs. A RoleBinding per target namespace grants them
+# there only, so an unlisted namespace stays unreachable even when a target names
+# it. Verbs match the only calls pkg/actuator makes.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: observer
+  labels:
+    helm.sh/chart: couchbase-health-observer-0.5.0
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
+    app.kubernetes.io/version: "0.5.0"
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -28,11 +56,17 @@ rules:
     resources: ["deployments"]
     verbs: ["get", "update"]
 ---
+# Source: couchbase-health-observer/templates/rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: observer
   namespace: default
+  labels:
+    helm.sh/chart: couchbase-health-observer-0.5.0
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
+    app.kubernetes.io/version: "0.5.0"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -42,99 +76,115 @@ subjects:
     name: observer
     namespace: default
 ---
+# Source: couchbase-health-observer/templates/service.yaml
 apiVersion: v1
 kind: Service
 metadata:
   name: observer
   namespace: default
   labels:
-    app: observer
+    helm.sh/chart: couchbase-health-observer-0.5.0
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
+    app.kubernetes.io/version: "0.5.0"
   annotations:
-    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
     prometheus.io/port: "8080"
-    prometheus.io/path: "/metrics"
+    prometheus.io/scrape: "true"
 spec:
+  type: ClusterIP
   selector:
-    app: observer
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
   ports:
     - name: http
       port: 8080
-      targetPort: 8080
+      targetPort: http
 ---
+# Source: couchbase-health-observer/templates/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: observer
   namespace: default
   labels:
-    app: observer
+    helm.sh/chart: couchbase-health-observer-0.5.0
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
+    app.kubernetes.io/version: "0.5.0"
 spec:
-  replicas: 1 # single active detector; see docs/DEPLOYMENT.md "SPOF & HA" for mitigations
+  # Single active detector. See docs/DEPLOYMENT.md "SPOF & HA" for mitigations.
+  replicas: 1
   selector:
     matchLabels:
-      app: observer
+      app.kubernetes.io/name: couchbase-health-observer
+      app.kubernetes.io/instance: observer
   template:
     metadata:
       labels:
-        app: observer
+        app.kubernetes.io/name: couchbase-health-observer
+        app.kubernetes.io/instance: observer
       annotations:
-        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
         prometheus.io/port: "8080"
-        prometheus.io/path: "/metrics"
+        prometheus.io/scrape: "true"
     spec:
       serviceAccountName: observer
       containers:
         - name: observer
-          image: ghcr.io/couchbase-ps/couchbase-health-observer:latest
+          image: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.0
           imagePullPolicy: Always
           args:
             - --actuators=k8s
             - --conn=couchbase://region-a-srv.region-a.svc
             - --secondary-conn=couchbase://region-b-srv.region-b.svc
             - --bucket=observer
-            - --user=Administrator
-            - --pass=password
+            # Kubernetes expands $(VAR) in args, so credentials stay in the Secret.
+            - --user=$(CB_USER)
+            - --pass=$(CB_PASS)
             - --critical=kv
+            - --addr=:8080
             - --interval=5s
+            - --probe-timeout=2s
             - --failover-delay=150s
+            - --log-level=info
             - --namespace=default
             - --configmap=cb-conn
             - --config-key=connstring
             - --deployments=mock-app
-            # Webhook: add "webhook" to --actuators (alone, or as k8s,webhook).
-            # - --actuators=k8s,webhook
-            # - --webhook-url=https://gitlab.example.com/api/v4/projects/7/ref/main/trigger/pipeline
-            # - --webhook-header=X-Source: observer
-            # - --webhook-timeout=3s
-            # - --webhook-retries=2
-            # - --webhook-ca-cert=/etc/webhook-ca/ca.pem   # enterprise CA, mount it below
-            # - --webhook-skip-verify                      # insecure, logs a WARN at startup
-          # env:
-          #   - name: WEBHOOK_USER
-          #     valueFrom: { secretKeyRef: { name: observer-webhook, key: user } }
-          #   - name: WEBHOOK_PASS
-          #     valueFrom: { secretKeyRef: { name: observer-webhook, key: pass } }
-          #   - name: WEBHOOK_HEADER      # one "Key: Value" per line
-          #     valueFrom: { secretKeyRef: { name: observer-webhook, key: headers } }
+          env:
+            - name: CB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: observer-credentials
+                  key: username
+            - name: CB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: observer-credentials
+                  key: password
           ports:
             - name: http
               containerPort: 8080
-          livenessProbe: # loop alive — NEVER /health/couchbase
+          # Loop alive. NEVER /health/couchbase: a Couchbase outage would restart
+          # the observer exactly when it must act.
+          livenessProbe:
             httpGet:
               path: /healthz
-              port: 8080
+              port: http
             initialDelaySeconds: 15
             periodSeconds: 10
-          readinessProbe: # wired to act (K8s API reachable) — NEVER /health/couchbase
+          # Wired to act: Kubernetes API reachable. NEVER /health/couchbase.
+          readinessProbe:
             httpGet:
               path: /readyz
-              port: 8080
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
             limits:
               cpu: "1"
               memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
