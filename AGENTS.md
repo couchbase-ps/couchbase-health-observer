@@ -30,9 +30,11 @@ pkg/svchealth/        SDK per-service health detector (types, prober, active-clu
 cmd/svchealthcheck/   server exposing /health/couchbase (+ --actuators wiring, runSwitch)
 pkg/notify/           switch webhook: Event payload, Notifier iface, HTTP notifier (auth/headers/retries/TLS)
 deploy/compose/       5-node Couchbase EE 8.0.1 harness for the compose detector stack
-deploy/kind/          kind + official Couchbase Helm switch stack (mock-app in default, mock-app-b in app-b, webhook-receiver for scenario E)
+charts/couchbase-health-observer/  observer Helm chart. Single source of truth for the k8s shape. OCI to ghcr.io/couchbase-ps/charts on vX.Y.Z + .tgz on the release. version = appVersion = image tag.
+hack/render-manifests.sh          regenerates deploy/k8s from the chart. deploy/k8s is GENERATED, never hand-edit. ci.yml `chart` job fails on drift.
+deploy/kind/          kind + official Couchbase Helm switch stack (mock-app in default, mock-app-b in app-b, webhook-receiver for scenario E). Observer itself installs from the chart with values-examples/kind.yaml.
 deploy/aws/           distributed-quorum AWS aggregation infra (Terraform): monitoring TG + quorum alarm + SNS
-test/<stack>/         per-stack tests, each independently runnable: test/compose, test/kind, test/aws
+test/<stack>/         per-stack tests, each independently runnable: test/compose, test/kind, test/aws, test/helm (chart lint+render, no cluster)
 HANDOFF.md            running progress log — READ THIS to see what is done and what is next
 ```
 
@@ -44,6 +46,7 @@ HANDOFF.md            running progress log — READ THIS to see what is done and
 - **Frequent commits**, one logical step each. **Rebase, never merge** (linear history).
 - **Commit convention: gitmoji** (not Conventional Commits). Subject = `<emoji>(scope) #<issue>: <desc>` (scope and `#issue` optional), e.g. `✨(svchealth) #1: per-service rollup`, `🐛(eks-demo) #6: ...`, `📝 #5: ...`, `🎉 bootstrap`. Map: ✨ feature, 🐛 fix, 📝 docs, ✅ tests, ♻️ refactor, ⚡️ perf, 👷 CI, 🐳 docker/build, 🔧 tooling/config, 🎉 project init, 💥 breaking. `cliff.toml` groups these for the changelog (git-cliff); releases are cut by pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
 - Integration tests build-tagged `//go:build integration`, need compose cluster up.
+- Chart change = assertion first in `test/helm/render.sh`, then template, then `hack/render-manifests.sh`, then commit the regenerated `deploy/k8s`. Credentials never in args: `--pass=$(CB_PASS)` + Secret env, Kubernetes expands `$(VAR)`. RBAC = ClusterRole + RoleBinding per derived namespace, never ClusterRoleBinding. Repo is public: no customer name or value in the chart.
 - **Docs stay compressed.** `AGENTS.md`, `CLAUDE.md`, `HANDOFF.md` maintained in caveman-speak (terse, articles/filler dropped, code/commands/paths/tables exact). After editing any of them, recompress: `/caveman:compress <file>` if the caveman skill is available, else compress inline by hand. No `.original.md` backups — git is the history.
 
 ## Workflow
