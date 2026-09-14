@@ -139,6 +139,14 @@ derivation.
 | `extraArgs` | `[]` | Appended after the generated arguments. |
 | `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, `podLabels` | | Standard. |
 
+## Labels
+
+Objects carry the standard Helm labels, so select the pods with
+`app.kubernetes.io/name=couchbase-health-observer` (add
+`app.kubernetes.io/instance=<release>` when several releases share a namespace). The
+hand-written manifest used `app: observer` before this chart existed: update any
+dashboard, scrape config or script that still selects on it.
+
 ## Probes
 
 Liveness is `/healthz` (the loop is alive) and readiness is `/readyz` (the Kubernetes API

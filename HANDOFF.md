@@ -428,5 +428,10 @@ best effort, not a product release.
 - Step 10 done: chart README (support status, install by OCI and tgz, full values table,
   credentials, TLS, RBAC derivation), plus a Helm section in README.md, Helm as the first
   install path in docs/DEPLOYMENT.md, and a generated-file warning in deploy/k8s/README.md.
-- Remaining: open the PR, merge, tag v0.5.0, verify image + OCI chart + tgz publish, then
+- PR #45 open. First CI run failed `kind-region-switch`: the e2e selected the observer
+  pod with `-l app=observer`, a label only the deleted kustomize overlay set. The chart
+  uses the standard `app.kubernetes.io/*` labels, so the selector matched nothing and the
+  restart-count jsonpath hit an empty list. Fixed by `$OBSERVER_SELECTOR` in the e2e.
+  Anything outside this repo that selects `app: observer` needs the same update.
+- Remaining: merge, tag v0.5.0, verify image + OCI chart + tgz publish, then
   Tayeb emails the customer the install details.
