@@ -1,0 +1,57 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+# Needs the Prometheus Operator (PrometheusRule CRD). ObserverAbsent is the
+# dead-man switch: the concrete SPOF mitigation for a single detector.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "observer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observer.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: observer
+      rules:
+        - alert: ObserverAbsent
+          expr: up{job="{{ .Values.monitoring.prometheusRule.job }}"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Observer is absent (dead-man switch)"
+            description: "No scrape of the observer for 1m. The single detector may be down."
+        - alert: ObserverLoopStalled
+          expr: time() - observer_loop_last_tick_timestamp_seconds > 30
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Observer active loop stalled"
+            description: "No loop tick for more than 30s. Liveness should restart it, alert if it persists."
+        - alert: CouchbaseSustainedDown
+          expr: observer_couchbase_up == 0
+          for: 3m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Active Couchbase cluster DOWN for 3m"
+            description: "observer_couchbase_up names the ACTIVE cluster (primary until a switch, secondary after one). A region switch should have fired, check observer_failover_total."
+        - alert: ObserverActuationErrors
+          expr: increase(observer_failover_errors_total[5m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "Observer actuation errors"
+            description: "The observer failed to patch the ConfigMap or roll a deployment."
+        - alert: ObserverSwitchHeldSecondaryDown
+          expr: observer_secondary_up == 0 and observer_couchbase_up == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Failover held: secondary not ready while primary is down"
+            description: "Both regions unhealthy. Manual intervention required."
+{{- end }}

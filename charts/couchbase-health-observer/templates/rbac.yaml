@@ -1,0 +1,38 @@
+{{- if and .Values.rbac.create (eq (include "observer.hasK8sActuator" .) "true") }}
+# One ClusterRole holds the verbs. A RoleBinding per target namespace grants them
+# there only, so an unlisted namespace stays unreachable even when a target names
+# it. Verbs match the only calls pkg/actuator makes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "observer.fullname" . }}
+  labels:
+    {{- include "observer.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "update"]
+{{- range (splitList "," (include "observer.targetNamespaces" .)) }}
+{{- if . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "observer.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "observer.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "observer.fullname" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "observer.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

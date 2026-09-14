@@ -1,0 +1,142 @@
+# Couchbase health observer.
+#
+# Delivered and maintained on a best-effort basis by the Couchbase Delivery team.
+# Not a Couchbase product release, not covered by product support.
+#
+# Defaults render a full Kubernetes actuator with RBAC. Set actuators to ""
+# for an observe-only deployment that patches nothing.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/couchbase-ps/couchbase-health-observer
+  # Empty means the chart appVersion. Never "latest" in a customer install.
+  tag: ""
+  pullPolicy: Always
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# What the observer does when a switch is due.
+#   ""            observe only, serve /health/couchbase, actuate nothing
+#   k8s           patch the target ConfigMaps and roll the target Deployments
+#   webhook       POST the switch request to webhook.url
+#   k8s,webhook   both
+actuators: k8s
+
+couchbase:
+  connString: couchbase://localhost
+  # Empty disables the switch: with no secondary there is nowhere to go.
+  secondaryConnString: ""
+  bucket: travel-sample
+  # Services whose loss makes the cluster DOWN. Comma-separated.
+  criticalServices: kv
+  username: Administrator
+  password: password
+  # Set to keep credentials out of the release. Wins over username/password.
+  existingSecret: ""
+  usernameKey: username
+  passwordKey: password
+
+detector:
+  interval: 5s
+  probeTimeout: 2s
+  failoverDelay: 150s
+  # trace, debug, info, warn, error
+  logLevel: info
+  dryRun: false
+
+# Kubernetes actuator targets. Entries are "name" or "namespace/name".
+# An unqualified entry uses targets.namespace.
+targets:
+  namespace: default
+  configmaps: cb-conn
+  configKey: connstring
+  deployments: ""
+
+rbac:
+  create: true
+  # Empty derives the namespace set from the targets above. Set to override.
+  namespaces: []
+
+# CA certificate for couchbases:// connections.
+tls:
+  caCert: ""
+  existingCaSecret: ""
+  caSecretKey: ca.pem
+  # Insecure. The observer logs a WARN at startup.
+  skipVerify: false
+
+webhook:
+  url: ""
+  username: ""
+  password: ""
+  # Set to keep the webhook credentials out of the release.
+  existingSecret: ""
+  usernameKey: webhook-username
+  passwordKey: webhook-password
+  # Only for a secret held header set, one "Key: Value" per line in that key.
+  headersKey: ""
+  # One "Key: Value" per entry.
+  headers: []
+  timeout: 3s
+  retries: 2
+  caCert: ""
+  existingCaSecret: ""
+  caSecretKey: ca.pem
+  skipVerify: false
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: /metrics
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: ""
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels:
+      role: alert-rules
+    # Scrape job label the alert expressions select on.
+    job: observer
+
+# Probe wiring. Never point either probe at /health/couchbase: a Couchbase
+# outage would restart the observer exactly when it must act.
+livenessProbe:
+  initialDelaySeconds: 15
+  periodSeconds: 10
+readinessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+# Appended verbatim after the generated arguments.
+extraArgs: []
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
