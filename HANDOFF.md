@@ -420,4 +420,9 @@ best effort, not a product release.
   matching the side-loaded `$OBSERVER_IMAGE`.
 - ClusterRole rules are block style, not flow style: `assert_observer_rbac` compares the
   normalized rule text and flow style broke it.
-- Next: step 9, publish the chart from release.yml (OCI + .tgz), then step 10 docs.
+- Step 9 done: `release.yml` gained a `chart` job. It fails the release when Chart.yaml
+  `version`/`appVersion` disagree with the tag, packages, pushes to
+  `oci://ghcr.io/couchbase-ps/charts` (GHCR package names are unique per org and the bare
+  name is the image, hence the `charts` subpath), and uploads the `.tgz` to the release.
+  Workflow permissions now include `packages: write`.
+- Next: step 10, docs (chart README, root README, docs/DEPLOYMENT.md, deploy/k8s/README.md).

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   test:
@@ -77,3 +78,47 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: gh release upload "$TAG" dist/* --clobber
+
+  chart:
+    name: Helm chart
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.1.4
+
+      # Chart version, appVersion and image tag move together, so a customer can
+      # read one number. A mismatch here means the tag and the chart disagree.
+      - name: Versions agree with the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          want="${TAG#v}"
+          chart_version="$(helm show chart charts/couchbase-health-observer | awk '/^version:/ {print $2}')"
+          app_version="$(helm show chart charts/couchbase-health-observer | awk '/^appVersion:/ {print $2}' | tr -d '"')"
+          [ "$chart_version" = "$want" ] || { echo "Chart.yaml version $chart_version != tag $want"; exit 1; }
+          [ "$app_version" = "$want" ] || { echo "Chart.yaml appVersion $app_version != tag $want"; exit 1; }
+
+      - name: Package
+        run: helm package charts/couchbase-health-observer --destination dist
+
+      # OCI is the standard path. The .tgz on the release covers pipelines that
+      # cannot reach an OCI registry.
+      - name: Push to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+          helm push dist/*.tgz oci://ghcr.io/couchbase-ps/charts
+
+      - name: Attach the package to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/*.tgz --clobber
