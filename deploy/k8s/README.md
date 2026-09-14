@@ -1,7 +1,18 @@
-# deploy/k8s — centralized Observer (production manifest)
+# deploy/k8s: centralized Observer (generated manifest)
 
 Applies the active-mode Observer that repoints `cb-conn` and rolls dependent apps
 on a sustained primary outage.
+
+**Both files here are generated.** They are rendered from the Helm chart by
+`hack/render-manifests.sh` with `charts/couchbase-health-observer/values-examples/actuator.yaml`,
+and CI fails when they no longer match the chart. Change the chart and regenerate; a hand
+edit here is lost on the next render. Helm users should install the chart directly
+(`charts/couchbase-health-observer/README.md`); these files exist for teams that do not
+use Helm.
+
+Credentials come from the `observer-credentials` Secret the chart renders, reaching the
+process through `$(CB_USER)` / `$(CB_PASS)` argument expansion. Replace the placeholder
+values before applying.
 
     kubectl apply -f deploy/k8s/observer.yaml
     kubectl apply -f deploy/k8s/observer-alerts.yaml   # needs the Prometheus Operator (PrometheusRule CRD)
