@@ -2,6 +2,8 @@
 fullnameOverride: observer
 
 image:
+  # Built locally and side-loaded into the kind nodes, never pulled.
+  repository: couchbase-health-observer
   tag: dev
   pullPolicy: Never
 

@@ -160,7 +160,10 @@ done
 echo "== deploy mock app and active observer =="
 kubectl apply -k "$ROOT/deploy/kind/mock-app"
 kubectl apply -k "$ROOT/deploy/kind/mock-app-b"
-kubectl apply -k "$ROOT/deploy/kind/observer"
+helm upgrade --install observer "$ROOT/charts/couchbase-health-observer" \
+  --namespace default \
+  --values "$ROOT/charts/couchbase-health-observer/values-examples/kind.yaml" \
+  --wait --timeout 3m
 kubectl rollout status deployment/mock-app --timeout=2m
 kubectl rollout status deployment/mock-app-b --namespace app-b --timeout=2m
 kubectl rollout status deployment/observer --timeout=2m
@@ -462,7 +465,7 @@ kubectl wait --for=delete pod -l app=observer --timeout=60s
 # secondary probe returns fast and the receiver answers immediately, so the
 # real tick stays well under the window. Do not "simplify" this back to the
 # plan's defaults.
-# Args index 0 is the actuator selector (see deploy/kind/observer/deployment.yaml),
+# Args index 0 is the actuator selector (see values-examples/kind.yaml),
 # so replacing it swaps the whole actuator set in one op.
 kubectl patch deployment observer --type=json -p '[
   {"op":"replace","path":"/spec/template/spec/containers/0/args/0","value":"--actuators=webhook"},
