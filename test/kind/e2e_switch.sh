@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# The observer is installed from the chart, which labels pods the standard Helm
+# way. There is no "app: observer" label any more.
+OBSERVER_SELECTOR="app.kubernetes.io/name=couchbase-health-observer"
 KIND_CLUSTER="${KIND_CLUSTER:-couchbase-health-observer}"
 OBSERVER_IMAGE="${OBSERVER_IMAGE:-couchbase-health-observer:dev}"
 KEEP_KIND="${KEEP_KIND:-0}"
@@ -239,7 +242,7 @@ kill "$PF_PID" 2>/dev/null || true
 echo "  /healthz=$LIVE /readyz=$READY (during DB outage)"
 [[ "$LIVE" == "200" ]] || { echo "FAIL: liveness not 200 during DB outage (would restart mid-outage)"; exit 1; }
 [[ "$READY" == "200" ]] || { echo "FAIL: readiness not 200 (K8s API still reachable during DB outage)"; exit 1; }
-RESTARTS="$(kubectl get pod -l app=observer -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')"
+RESTARTS="$(kubectl get pod -l "$OBSERVER_SELECTOR" -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')"
 [[ "$RESTARTS" == "0" ]] || { echo "FAIL: observer restarted during DB outage (restartCount=$RESTARTS)"; exit 1; }
 echo "observer survived the DB outage without restart (restartCount=0)"
 
@@ -333,7 +336,7 @@ kubectl patch configmap cb-conn --type=merge -p '{"data":{"connstring":"couchbas
 
 echo "stopping observer (simulate a crash before it could react to the outage)"
 kubectl scale deployment/observer --replicas=0
-kubectl wait --for=delete pod -l app=observer --timeout=60s
+kubectl wait --for=delete pod -l "$OBSERVER_SELECTOR" --timeout=60s
 
 BEFORE_HASH="$(kubectl get deployment mock-app -o jsonpath='{.spec.template.metadata.annotations.observer/restartedAt}')"
 
@@ -342,8 +345,8 @@ kubectl scale deployment/observer --replicas=1
 # Cold-start into a DOWN primary: the observer is intentionally NOT Ready until its
 # first health evaluation completes (/readyz gates on firstEval), and readiness does
 # NOT gate the switch loop. Wait for the pod to be Running, then assert on the switch.
-until kubectl get pod -l app=observer -o name 2>/dev/null | grep -q .; do sleep 1; done # RS may not have created the pod yet -> avoid "no matching resources found"
-kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
+until kubectl get pod -l "$OBSERVER_SELECTOR" -o name 2>/dev/null | grep -q .; do sleep 1; done # RS may not have created the pod yet -> avoid "no matching resources found"
+kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l "$OBSERVER_SELECTOR" --timeout=2m
 
 echo "== wait for ConfigMap switch =="
 NEW=""
@@ -354,8 +357,8 @@ for _ in $(seq 1 120); do
 done
 [[ "$NEW" == "couchbase://region-b-srv.region-b.svc" ]] || {
   echo "FAIL: cb-conn did not switch after cold-start restart (cb-conn=$NEW)"
-  kubectl get pods -l app=observer -o wide || true
-  kubectl describe pod -l app=observer || true
+  kubectl get pods -l "$OBSERVER_SELECTOR" -o wide || true
+  kubectl describe pod -l "$OBSERVER_SELECTOR" || true
   kubectl logs deployment/observer --tail=200 || true
   exit 1
 }
@@ -381,14 +384,14 @@ ROLL_B_BEFORE="$(kubectl get deployment mock-app-b --namespace app-b -o jsonpath
 
 echo "stopping observer (simulate a crash after the switch already happened)"
 kubectl scale deployment/observer --replicas=0
-kubectl wait --for=delete pod -l app=observer --timeout=60s
+kubectl wait --for=delete pod -l "$OBSERVER_SELECTOR" --timeout=60s
 
 echo "cold-starting observer; region-a still DOWN, cb-conn already on secondary"
 kubectl scale deployment/observer --replicas=1
 # Same as scenario C: cold-start into a DOWN primary is not Ready until the first
 # evaluation; wait for Running, not Ready.
-until kubectl get pod -l app=observer -o name 2>/dev/null | grep -q .; do sleep 1; done # RS may not have created the pod yet -> avoid "no matching resources found"
-kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
+until kubectl get pod -l "$OBSERVER_SELECTOR" -o name 2>/dev/null | grep -q .; do sleep 1; done # RS may not have created the pod yet -> avoid "no matching resources found"
+kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l "$OBSERVER_SELECTOR" --timeout=2m
 
 echo "asserting cb-conn stays region-b for ~45s (> FailoverDelay)..."
 for _ in $(seq 1 22); do
@@ -452,7 +455,7 @@ ROLL_B_BEFORE_E="$(kubectl get deployment mock-app-b --namespace app-b -o jsonpa
 
 echo "restarting the observer in webhook-only mode"
 kubectl scale deployment/observer --replicas=0
-kubectl wait --for=delete pod -l app=observer --timeout=60s
+kubectl wait --for=delete pod -l "$OBSERVER_SELECTOR" --timeout=60s
 # The observer Deployment runs --interval=2s, so the liveness window (3x interval)
 # is 6s. The guard now warns on the COMBINED probe + webhook budget: 2*probe-timeout
 # + (retries+1)*webhook-timeout + backoff. The webhook defaults (3s timeout, 2
@@ -475,8 +478,8 @@ kubectl patch deployment observer --type=json -p '[
   {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--webhook-retries=1"}
 ]'
 kubectl scale deployment/observer --replicas=1
-until kubectl get pod -l app=observer -o name 2>/dev/null | grep -q .; do sleep 1; done
-kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l app=observer --timeout=2m
+until kubectl get pod -l "$OBSERVER_SELECTOR" -o name 2>/dev/null | grep -q .; do sleep 1; done
+kubectl wait --for=jsonpath='{.status.phase}'=Running pod -l "$OBSERVER_SELECTOR" --timeout=2m
 
 echo "== wait for the webhook delivery =="
 DELIVERED=0
