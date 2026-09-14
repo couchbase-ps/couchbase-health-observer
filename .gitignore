@@ -19,3 +19,6 @@ sandbox.tfvars
 deploy/aws/lambda/bootstrap
 *.zip
 .worktrees/
+
+# Locally generated test certificates, never commit the private keys
+/deploy/compose-cng/certs/
