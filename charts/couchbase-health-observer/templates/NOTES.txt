@@ -1,0 +1,24 @@
+{{ .Chart.Name }} {{ .Chart.Version }} installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+Support status: delivered and maintained on a best-effort basis by the Couchbase
+Delivery team. This is not a Couchbase product release and is not covered by
+product support or a product SLA.
+
+Image:      {{ include "observer.image" . }}
+Actuators:  {{ default "(observe only)" (include "observer.actuatorList" .) }}
+Primary:    {{ .Values.couchbase.connString }}
+{{- if .Values.couchbase.secondaryConnString }}
+Secondary:  {{ .Values.couchbase.secondaryConnString }}
+{{- else }}
+Secondary:  (none, no switch is possible)
+{{- end }}
+{{- if eq (include "observer.hasK8sActuator" .) "true" }}
+Namespaces: {{ include "observer.targetNamespaces" . }}
+{{- end }}
+
+Check health:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "observer.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -s localhost:{{ .Values.service.port }}/health/couchbase
+
+Failback is always manual. See docs/RUNBOOK-failover-failback.md in the repository.

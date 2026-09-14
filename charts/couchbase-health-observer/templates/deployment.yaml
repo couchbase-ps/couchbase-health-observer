@@ -1,0 +1,195 @@
+{{- $k8s := eq (include "observer.hasK8sActuator" .) "true" -}}
+{{- $webhook := eq (include "observer.hasWebhookActuator" .) "true" -}}
+{{- $caSecret := include "observer.caSecretName" . -}}
+{{- $webhookCaSecret := include "observer.webhookCaSecretName" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "observer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observer.labels" . | nindent 4 }}
+spec:
+  # Single active detector. See docs/DEPLOYMENT.md "SPOF & HA" for mitigations.
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "observer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "observer.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.service.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "observer.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: observer
+          image: {{ include "observer.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            {{- with include "observer.actuatorList" . }}
+            - --actuators={{ . }}
+            {{- end }}
+            - --conn={{ .Values.couchbase.connString }}
+            {{- with .Values.couchbase.secondaryConnString }}
+            - --secondary-conn={{ . }}
+            {{- end }}
+            - --bucket={{ .Values.couchbase.bucket }}
+            # Kubernetes expands $(VAR) in args, so credentials stay in the Secret.
+            - --user=$(CB_USER)
+            - --pass=$(CB_PASS)
+            - --critical={{ .Values.couchbase.criticalServices }}
+            - --addr=:{{ .Values.service.port }}
+            - --interval={{ .Values.detector.interval }}
+            - --probe-timeout={{ .Values.detector.probeTimeout }}
+            - --failover-delay={{ .Values.detector.failoverDelay }}
+            - --log-level={{ .Values.detector.logLevel }}
+            {{- if .Values.detector.dryRun }}
+            - --dry-run
+            {{- end }}
+            {{- if $k8s }}
+            - --namespace={{ .Values.targets.namespace | default .Release.Namespace }}
+            - --configmap={{ .Values.targets.configmaps }}
+            - --config-key={{ .Values.targets.configKey }}
+            {{- with .Values.targets.deployments }}
+            - --deployments={{ . }}
+            {{- end }}
+            {{- end }}
+            {{- if $webhook }}
+            - --webhook-url={{ required "webhook.url is required when the webhook actuator is enabled" .Values.webhook.url }}
+            {{- range .Values.webhook.headers }}
+            - --webhook-header={{ . }}
+            {{- end }}
+            - --webhook-timeout={{ .Values.webhook.timeout }}
+            - --webhook-retries={{ .Values.webhook.retries }}
+            {{- if $webhookCaSecret }}
+            - --webhook-ca-cert=/etc/observer/webhook-ca/{{ .Values.webhook.caSecretKey }}
+            {{- end }}
+            {{- if .Values.webhook.skipVerify }}
+            - --webhook-skip-verify
+            {{- end }}
+            {{- end }}
+            {{- if $caSecret }}
+            - --tls-cert-path=/etc/observer/tls/{{ .Values.tls.caSecretKey }}
+            {{- end }}
+            {{- if .Values.tls.skipVerify }}
+            - --tls-skip-verify
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: CB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "observer.secretName" . }}
+                  key: {{ .Values.couchbase.usernameKey }}
+            - name: CB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "observer.secretName" . }}
+                  key: {{ .Values.couchbase.passwordKey }}
+            {{- if $webhook }}
+            {{- if or .Values.webhook.username .Values.webhook.existingSecret }}
+            - name: WEBHOOK_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "observer.webhookSecretName" . }}
+                  key: {{ .Values.webhook.usernameKey }}
+            {{- end }}
+            {{- if or .Values.webhook.password .Values.webhook.existingSecret }}
+            - name: WEBHOOK_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "observer.webhookSecretName" . }}
+                  key: {{ .Values.webhook.passwordKey }}
+            {{- end }}
+            {{- with .Values.webhook.headersKey }}
+            - name: WEBHOOK_HEADER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "observer.webhookSecretName" $ }}
+                  key: {{ . }}
+            {{- end }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          # Loop alive. NEVER /health/couchbase: a Couchbase outage would restart
+          # the observer exactly when it must act.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          # Wired to act: Kubernetes API reachable. NEVER /health/couchbase.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          {{- if or $caSecret (and $webhook $webhookCaSecret) }}
+          volumeMounts:
+            {{- if $caSecret }}
+            - name: couchbase-ca
+              mountPath: /etc/observer/tls
+              readOnly: true
+            {{- end }}
+            {{- if and $webhook $webhookCaSecret }}
+            - name: webhook-ca
+              mountPath: /etc/observer/webhook-ca
+              readOnly: true
+            {{- end }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if or $caSecret (and $webhook $webhookCaSecret) }}
+      volumes:
+        {{- if $caSecret }}
+        - name: couchbase-ca
+          secret:
+            secretName: {{ $caSecret }}
+        {{- end }}
+        {{- if and $webhook $webhookCaSecret }}
+        - name: webhook-ca
+          secret:
+            secretName: {{ $webhookCaSecret }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

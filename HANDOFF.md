@@ -373,3 +373,35 @@ existing tests now `Observe("UP")` first to arm. No auto-failback regardless.
 - kind e2e covers two app namespaces (`default/mock-app` unqualified + `app-b/mock-app-b`
   qualified) in one run. switch-lambda has the same env parsing.
 - Out of scope (follow-ups): per-target `--config-key` override; multi-pod observer HA.
+
+## Task 14 in progress (2026-09-14): Helm chart (#44)
+
+Plan: vault `Couchbase/Clients/Emirates/MCA/Observer/20260914 Helm chart plan.md`.
+Design: same folder, `20260914 Helm chart design.md`. Asked by Akeeb (Emirates),
+Teams 2026-09-09. Chart is packaging only; Observer stays a Delivery team artifact,
+best effort, not a product release.
+
+- Step 1 done: chart scaffold `charts/couchbase-health-observer/` (Chart.yaml,
+  values.yaml, `_helpers.tpl`, NOTES.txt) + assertion harness `test/helm/render.sh`
+  (helm lint + helm template, no cluster). `version`/`appVersion`/image tag lockstep;
+  empty `image.tag` falls back to appVersion, never `latest`.
+- `_helpers.tpl` derives the RBAC namespace set from the ConfigMap/Deployment targets
+  (`observer.targetNamespaces`), so RBAC can never disagree with the actuation targets.
+  `rbac.namespaces` overrides.
+- Chart defaults stay generic (`couchbase://localhost`, bucket `travel-sample`, no
+  deployments). The repo is public, so no customer value ships. The illustrative
+  region-a/region-b manifest keeps its content via `values-examples/actuator.yaml`,
+  which is what `hack/render-manifests.sh` will render into `deploy/k8s/` (step 7).
+- Steps 2-6 done: Deployment/Service/ServiceAccount, credentials in a Secret, CA cert
+  mounts, RBAC, monitoring. `test/helm/render.sh` asserts each of them.
+- Credentials never reach the args: Kubernetes expands `$(VAR)` in `args`, so the chart
+  renders `--user=$(CB_USER)` / `--pass=$(CB_PASS)` with env from a Secret. No Go change.
+  `couchbase.existingSecret` / `webhook.existingSecret` win over the inline values.
+- TLS: `tls.caCert` (or `tls.existingCaSecret`) mounts read-only at `/etc/observer/tls`
+  and wires `--tls-cert-path`. Same shape for the webhook CA at `/etc/observer/webhook-ca`.
+  No manifest mounted a cert before this.
+- RBAC renders only with the `k8s` actuator: ClusterRole + one RoleBinding per derived
+  namespace. Never a ClusterRoleBinding.
+- Monitoring: PrometheusRule (the 5 alerts, `job` selector configurable) + ServiceMonitor,
+  both default false because both need Prometheus Operator CRDs.
+- Next: step 7, `hack/render-manifests.sh` + the CI diff gate on `deploy/k8s/`.

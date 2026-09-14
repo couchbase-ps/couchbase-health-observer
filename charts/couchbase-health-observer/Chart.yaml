@@ -1,0 +1,19 @@
+apiVersion: v2
+name: couchbase-health-observer
+description: Couchbase cluster health observer with optional multi-region switch actuation
+type: application
+version: 0.5.0
+appVersion: "0.5.0"
+kubeVersion: ">=1.23.0-0"
+home: https://github.com/couchbase-ps/couchbase-health-observer
+sources:
+  - https://github.com/couchbase-ps/couchbase-health-observer
+keywords:
+  - couchbase
+  - health
+  - failover
+  - observability
+annotations:
+  couchbase.com/support: >-
+    Delivered and maintained on a best-effort basis by the Couchbase Delivery team.
+    This is not a Couchbase product release and is not covered by product support.
