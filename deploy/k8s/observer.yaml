@@ -49,12 +49,20 @@ metadata:
     app.kubernetes.io/instance: observer
     app.kubernetes.io/version: "0.5.0"
 rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "update"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "update"]
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - update
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - update
 ---
 # Source: couchbase-health-observer/templates/rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1

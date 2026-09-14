@@ -9,12 +9,20 @@ metadata:
   labels:
     {{- include "observer.labels" . | nindent 4 }}
 rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "update"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "update"]
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - update
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - update
 {{- range (splitList "," (include "observer.targetNamespaces" .)) }}
 {{- if . }}
 ---

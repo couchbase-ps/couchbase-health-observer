@@ -411,4 +411,13 @@ best effort, not a product release.
   formatting alone. The generated files drop `app.kubernetes.io/managed-by: Helm`,
   because they are applied with kubectl and must not claim Helm ownership.
 - Example values: `values-examples/{actuator,observe-only,kind}.yaml`, all generic.
-- Next: step 8, kind e2e installs the chart, delete `deploy/kind/observer/`.
+- Step 8 done: `deploy/kind/observer/` (kustomize) is DELETED. `test/kind/e2e_switch.sh`
+  now does `helm upgrade --install observer ... --values values-examples/kind.yaml --wait`,
+  and `test/kind/render.sh` asserts against `helm template` instead of `kubectl kustomize`.
+  The e2e therefore exercises the artifact customers install. mock-app, mock-app-b and
+  webhook-receiver stay kustomize: they are fixtures, not the observer.
+- kind values use `image.repository: couchbase-health-observer` + `pullPolicy: Never`,
+  matching the side-loaded `$OBSERVER_IMAGE`.
+- ClusterRole rules are block style, not flow style: `assert_observer_rbac` compares the
+  normalized rule text and flow style broke it.
+- Next: step 9, publish the chart from release.yml (OCI + .tgz), then step 10 docs.

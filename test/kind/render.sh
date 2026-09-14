@@ -47,11 +47,20 @@ if grep -q 'name: query' <<<"$REGION_B"; then echo "FAIL: region-b should not ha
 grep -A8 'name: observer' <<<"$REGION_B" | grep -q 'replicas: 0'
 
 kubectl kustomize "$ROOT/deploy/kind/mock-app" >/dev/null
-kubectl kustomize "$ROOT/deploy/kind/observer" >/dev/null
 
-grep -q -- '--conn=couchbase://region-a-srv.region-a.svc' "$ROOT/deploy/kind/observer/deployment.yaml"
-grep -q -- '--secondary-conn=couchbase://region-b-srv.region-b.svc' "$ROOT/deploy/kind/observer/deployment.yaml"
-grep -q -- '--bucket=observer' "$ROOT/deploy/kind/observer/deployment.yaml"
+# The observer itself comes from the chart now, with the kind values file, so the
+# e2e exercises the artifact customers install.
+OBSERVER_CHART="$ROOT/charts/couchbase-health-observer"
+OBSERVER_KIND="$(
+  helm template observer "$OBSERVER_CHART" \
+    --namespace default \
+    --values "$OBSERVER_CHART/values-examples/kind.yaml"
+)"
+grep -q -- '--conn=couchbase://region-a-srv.region-a.svc' <<<"$OBSERVER_KIND"
+grep -q -- '--secondary-conn=couchbase://region-b-srv.region-b.svc' <<<"$OBSERVER_KIND"
+grep -q -- '--bucket=observer' <<<"$OBSERVER_KIND"
+grep -q 'image: couchbase-health-observer:dev' <<<"$OBSERVER_KIND"
+grep -q 'imagePullPolicy: Never' <<<"$OBSERVER_KIND"
 
 kubectl kustomize "$ROOT/deploy/kind/mock-app-b" >/dev/null
 
@@ -168,11 +177,11 @@ resources:
   - observer.yaml
 YAML
 
-assert_observer_rbac kind 'app-b,default,' "$(kubectl kustomize "$ROOT/deploy/kind/observer")"
+assert_observer_rbac kind 'app-b,default,' "$OBSERVER_KIND"
 assert_observer_rbac prod 'default,' "$(kubectl kustomize "$PROD_KUSTOMIZE")"
 
 # The observer must run with namespace-qualified targets covering both namespaces.
-grep -q -- '--configmap=cb-conn,app-b/cb-conn' "$ROOT/deploy/kind/observer/deployment.yaml"
-grep -q -- '--deployments=mock-app,app-b/mock-app-b' "$ROOT/deploy/kind/observer/deployment.yaml"
+grep -q -- '--configmap=cb-conn,app-b/cb-conn' <<<"$OBSERVER_KIND"
+grep -q -- '--deployments=mock-app,app-b/mock-app-b' <<<"$OBSERVER_KIND"
 
 echo "PASS: kind Helm releases and Kubernetes manifests render"
