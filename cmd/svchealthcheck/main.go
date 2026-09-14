@@ -530,6 +530,6 @@ func secondaryReady(status string) bool { return status != "DOWN" }
 // regionLabel extracts a short region name from a couchbase:// connstring, e.g.
 // "couchbase://region-a-srv.region-a.svc" -> "region-a". Empty conn -> "none".
 // regionLabel is the short cluster label used for metrics + log fields. It
-// delegates to obslog.ClusterLabel so DNS srv names and IPv4 connstrings
-// (Emirates) are labeled the same way everywhere.
+// delegates to obslog.ClusterLabel so DNS srv names and IPv4 connstrings are
+// labeled the same way everywhere.
 func regionLabel(conn string) string { return obslog.ClusterLabel(conn) }

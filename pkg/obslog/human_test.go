@@ -229,7 +229,7 @@ func TestClusterLabel(t *testing.T) {
 	cases := map[string]string{
 		"couchbase://region-a-srv.region-a.svc":  "region-a",
 		"couchbases://region-b-srv.region-b.svc": "region-b",
-		"couchbase://10.0.1.5":                   "10.0.1.5", // IPv4 (Emirates): keep the address
+		"couchbase://10.0.1.5":                   "10.0.1.5", // IPv4: keep the address
 		"couchbase://10.0.1.5:11210":             "10.0.1.5", // strip the port
 		"couchbase://10.0.1.5,10.0.1.6,10.0.1.7": "10.0.1.5", // multi-host: first host
 		"couchbases://192.168.10.20:11207":       "192.168.10.20",

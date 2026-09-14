@@ -74,10 +74,10 @@ func levelLabel(l slog.Level) string {
 // ClusterLabel derives a short human label for a cluster from its connstring.
 // DNS srv-style names collapse to the region
 // ("couchbase://region-a-srv.region-a.svc" -> "region-a"); IP-literal
-// connstrings (Emirates' setup) keep the full address rather than being
+// connstrings (a common VM estate setup) keep the full address rather than being
 // truncated to the first octet ("couchbase://10.0.1.5:11210" -> "10.0.1.5",
 // not "10"). A multi-host connstring uses the first host. Empty -> "none".
-// IPv6 literals are not special-cased (Emirates is IPv4).
+// IPv6 literals are not special-cased.
 func ClusterLabel(conn string) string {
 	if conn == "" {
 		return "none"

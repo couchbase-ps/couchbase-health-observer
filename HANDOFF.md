@@ -84,7 +84,7 @@ cluster_detail x/y summary); TRACE adds ONE per-node line (`cluster_nodes`,
 all seeds; per-tick health uses short role (`primary`/`secondary`);
 switch-narrative + actuator lines carry role + all addresses. `obslog.ClusterLabel`
 (first host / region collapse) + `AddressList` (all hosts) render IPv4 connstrings
-(Emirates) correctly: strip scheme+port, keep addresses. Health reason shows
+correctly: strip scheme+port, keep addresses. Health reason shows
 reachable fraction (X/Y); node status SDK-honest (reachable|unreachable). Golden
 `TestHumanCatalog` renders every event; live-verified on kind (A-D).
 
@@ -227,7 +227,7 @@ The SNS-triggered actuation for path 2, in this repo (not a separate repo), reus
 
 ## History: Observer implementation (through Task 12)
 
-- **Plan:** `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md` (vault).
+- **Plan:** delivery vault, Observer folder, `20260619 SDK per-service health detection plan.md`.
 - **Done:** repo bootstrap, compose, AGENTS/CLAUDE; Tasks 1-4 green (types, prober, Compute, gocb prober).
 - **Done:** SDK per-service detector COMPLETE (Tasks 1-7, e2e green). Observer deploys in compose, reports correct per-service / global health through auto-failover.
 - **Done:** failover actuation COMPLETE (state machine, Kubernetes actuator, active mode).
@@ -376,9 +376,9 @@ existing tests now `Observe("UP")` first to arm. No auto-failback regardless.
 
 ## Task 14 in progress (2026-09-14): Helm chart (#44)
 
-Plan: vault `Couchbase/Clients/Emirates/MCA/Observer/20260914 Helm chart plan.md`.
-Design: same folder, `20260914 Helm chart design.md`. Asked by Akeeb (Emirates),
-Teams 2026-09-09. Chart is packaging only; Observer stays a Delivery team artifact,
+Plan: delivery vault, Observer folder, `20260914 Helm chart plan.md`.
+Design: same folder, `20260914 Helm chart design.md`. Asked by a customer platform
+lead, 2026-09-09. Chart is packaging only; Observer stays a Delivery team artifact,
 best effort, not a product release.
 
 - Step 1 done: chart scaffold `charts/couchbase-health-observer/` (Chart.yaml,
@@ -429,4 +429,4 @@ best effort, not a product release.
   credentials, TLS, RBAC derivation), plus a Helm section in README.md, Helm as the first
   install path in docs/DEPLOYMENT.md, and a generated-file warning in deploy/k8s/README.md.
 - Remaining: open the PR, merge, tag v0.5.0, verify image + OCI chart + tgz publish, then
-  Tayeb emails Emirates the install details.
+  Tayeb emails the customer the install details.

@@ -4,7 +4,7 @@ Read first. Single source of truth for this repo, so you skip reading everything
 
 ## What this project is
 
-**Observer** for Couchbase. Detects cluster health and (later phases) drives automated multi-region failover. Built for Emirates **MCA replacement** engagement.
+**Observer** for Couchbase. Detects cluster health and (later phases) drives automated multi-region failover. Built by the Couchbase Delivery team for a customer engagement. **This repo is public: no customer name, environment name, host name or credential in any file, commit message or test fixture. Use placeholders (`app-dev`, `example.com`).**
 
 Health detection has two signal paths (see durable wiki "Cluster Health Signal Detection"):
 - **SDK per-service** (`pkg/svchealth`) — SDK `ping()` reachability per service, global = worst of app's *critical* services. **Path being implemented now.**
@@ -83,7 +83,7 @@ real AWS / LocalStack).
 
 ## Source design docs (Obsidian vault)
 
-- Plan being executed: `Couchbase/Clients/Emirates/MCA/Observer/20260619 SDK per-service health detection plan.md`
+- Plan being executed: delivery vault, Observer folder, `20260619 SDK per-service health detection plan.md`
 - Observer overall design: `.../20260617 Observer implementation design.md`
 - Health-signal findings (durable): `Couchbase/wiki/Architecture Review/Cluster Health Signal Detection.md`
 
