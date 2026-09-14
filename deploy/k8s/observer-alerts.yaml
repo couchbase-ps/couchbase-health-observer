@@ -1,17 +1,25 @@
-# Alerting rules for the centralized Observer. Requires the Prometheus Operator
-# (PrometheusRule CRD). The dead-man switch is the concrete SPOF mitigation for
-# the single-replica centralized model: if the observer disappears, you get paged.
+# GENERATED FILE. Do not edit.
+# Source: charts/couchbase-health-observer + values-examples/actuator.yaml
+# Regenerate: hack/render-manifests.sh
 #
-# NOTE: ObserverAbsent uses up{job="observer"} — it assumes your Prometheus scrape
-# names the job "observer" (annotation-based discovery via the Service/pod usually
-# does). If your scrape config labels the job differently, adjust the job= selector.
+# PROBE WIRING (do NOT change): livenessProbe -> /healthz (loop alive),
+# readinessProbe -> /readyz (K8s API reachable). NEVER point either probe at
+# /health/couchbase: a real Couchbase outage would then restart the observer
+# exactly when it must act.
+---
+# Source: couchbase-health-observer/templates/prometheusrule.yaml
+# Needs the Prometheus Operator (PrometheusRule CRD). ObserverAbsent is the
+# dead-man switch: the concrete SPOF mitigation for a single detector.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: observer-alerts
+  name: observer
   namespace: default
   labels:
-    app: observer
+    helm.sh/chart: couchbase-health-observer-0.5.0
+    app.kubernetes.io/name: couchbase-health-observer
+    app.kubernetes.io/instance: observer
+    app.kubernetes.io/version: "0.5.0"
     role: alert-rules
 spec:
   groups:
@@ -24,7 +32,7 @@ spec:
             severity: critical
           annotations:
             summary: "Observer is absent (dead-man switch)"
-            description: "No scrape of the observer for 1m — the single detector may be down."
+            description: "No scrape of the observer for 1m. The single detector may be down."
         - alert: ObserverLoopStalled
           expr: time() - observer_loop_last_tick_timestamp_seconds > 30
           for: 1m
@@ -32,7 +40,7 @@ spec:
             severity: critical
           annotations:
             summary: "Observer active loop stalled"
-            description: "No loop tick for >30s; liveness should restart it, alert if it persists."
+            description: "No loop tick for more than 30s. Liveness should restart it, alert if it persists."
         - alert: CouchbaseSustainedDown
           expr: observer_couchbase_up == 0
           for: 3m
@@ -40,7 +48,7 @@ spec:
             severity: warning
           annotations:
             summary: "Active Couchbase cluster DOWN for 3m"
-            description: "observer_couchbase_up names the ACTIVE cluster (primary until a switch, secondary after one); the series for an abandoned cluster is dropped. A region switch should have fired; check observer_failover_total."
+            description: "observer_couchbase_up names the ACTIVE cluster (primary until a switch, secondary after one). A region switch should have fired, check observer_failover_total."
         - alert: ObserverActuationErrors
           expr: increase(observer_failover_errors_total[5m]) > 0
           labels:
@@ -55,4 +63,4 @@ spec:
             severity: critical
           annotations:
             summary: "Failover held: secondary not ready while primary is down"
-            description: "Both regions unhealthy — manual intervention required."
+            description: "Both regions unhealthy. Manual intervention required."

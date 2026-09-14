@@ -49,3 +49,24 @@ jobs:
             terraform -chdir="$d" init -backend=false -input=false >/dev/null
             terraform -chdir="$d" validate
           done
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned to the version the manifests were rendered with: a different Helm
+      # can reorder output and fail the diff gate for no real drift.
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.1.4
+
+      - name: Lint and render assertions
+        run: test/helm/render.sh
+
+      # deploy/k8s is generated from the chart. Editing either one alone is drift.
+      - name: Manifests match the chart
+        run: |
+          hack/render-manifests.sh
+          git diff --exit-code deploy/k8s

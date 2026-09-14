@@ -1,0 +1,18 @@
+# Full Kubernetes actuator: watch the primary, repoint the connstring ConfigMap
+# and roll the dependent Deployments on a sustained outage.
+# Placeholder endpoints, replace them with your own.
+fullnameOverride: observer
+
+actuators: k8s
+
+couchbase:
+  connString: couchbase://region-a-srv.region-a.svc
+  secondaryConnString: couchbase://region-b-srv.region-b.svc
+  bucket: observer
+  criticalServices: kv
+
+targets:
+  namespace: default
+  configmaps: cb-conn
+  configKey: connstring
+  deployments: mock-app
