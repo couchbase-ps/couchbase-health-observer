@@ -34,4 +34,4 @@ Failback is manual by design: the operator decides when the primary is trustwort
 If a test kills a majority of primary data nodes, Couchbase refuses failover and the
 operator waits for manual action. Recreate the region (no PVCs = no data loss):
 `helm uninstall` + reinstall the region chart, then reconnect the observer and flip
-`cb-conn` back. (See the Emirates demo runbook "Failback gotcha" callout.)
+`cb-conn` back. (See the demo runbook "Failback gotcha" callout.)

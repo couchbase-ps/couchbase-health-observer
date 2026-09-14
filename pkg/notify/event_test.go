@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The payload is a published contract with Emirates: their pipeline reads these
+// The payload is a published contract with the consuming pipeline: it reads these
 // exact field names. Assert the marshalled shape, not just the struct.
 func TestEventJSONShape(t *testing.T) {
 	e := Event{
@@ -17,8 +17,8 @@ func TestEventJSONShape(t *testing.T) {
 		SustainedDownS: 152,
 		From:           Endpoint{Role: "primary", Conn: "couchbase://10.0.1.5,10.0.1.6", Label: "10.0.1.5", Nodes: []string{"10.0.1.5", "10.0.1.6"}},
 		To:             Endpoint{Role: "secondary", Conn: "couchbase://10.1.1.5", Label: "10.1.1.5", Status: "UP"},
-		ConfigMaps:     []string{"urp-dev/cb-conn"},
-		Deployments:    []string{"urp-dev/mca-api"},
+		ConfigMaps:     []string{"app-dev/cb-conn"},
+		Deployments:    []string{"app-dev/api"},
 		Actuators:      []string{"webhook"},
 		DryRun:         false,
 	}

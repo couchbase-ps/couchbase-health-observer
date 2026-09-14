@@ -7,7 +7,7 @@ func TestRegionLabel(t *testing.T) {
 		"couchbase://region-a-srv.region-a.svc":  "region-a",
 		"couchbases://region-b-srv.region-b.svc": "region-b",
 		"":                                       "none",
-		// Emirates uses IPv4 connstrings: keep the address, don't truncate to "10".
+		// IPv4 connstrings are common in VM estates: keep the address, don't truncate to "10".
 		"couchbase://10.0.1.5":          "10.0.1.5",
 		"couchbase://10.0.1.5:11210":    "10.0.1.5",
 		"couchbases://10.0.1.5:11207":   "10.0.1.5",

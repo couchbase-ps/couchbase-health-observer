@@ -66,7 +66,7 @@ do nothing when it already matches, because a restarted observer re-sends the
 same request while the primary is still down.
 
 `configmaps` and `deployments` describe the Kubernetes actuator's targets. Each
-entry is namespace-qualified (`"urp-dev/cb-conn"`), because one switch spans
+entry is namespace-qualified (`"app-dev/cb-conn"`), because one switch spans
 several namespaces and there is no single namespace to report. Both are omitted
 when they carry nothing to say (a webhook-only switch has no Kubernetes targets
 of its own), so treat both as optional. `event`, `to` and `actuators` are always

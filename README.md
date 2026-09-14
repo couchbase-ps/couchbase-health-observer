@@ -3,8 +3,8 @@
 Copyright 2026 Couchbase, Inc. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
 
 A small Go service that watches a Couchbase cluster's health and, optionally, drives
-automated multi-region failover on Kubernetes. Built for the Emirates MCA-replacement
-engagement.
+automated multi-region failover on Kubernetes. Built by the Couchbase Delivery team for
+a customer engagement.
 
 It detects health with the **SDK per-service** signal: it `ping()`s each Couchbase
 service and rolls the results up into a per-service and a global verdict. It runs in
