@@ -18,7 +18,7 @@ services:
       cng-lb-net:
         ipv4_address: 172.28.1.21
         aliases: ["cb-a-data-1", "cb-a-data-1.local"]
-    ports: ["8191:8091"]
+    ports: ["127.0.0.1:8191:8091"]
     volumes: ["cb-a-data-1:/opt/couchbase/var"]
 
   cb-a-data-2:

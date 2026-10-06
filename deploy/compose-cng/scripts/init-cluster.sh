@@ -5,8 +5,8 @@
 #   1. node lists come from env, so one script initializes either region
 #   2. bucket is lbtest with a per-region replica count, not travel-sample
 #      (faster, deterministic, and region-b has only one node)
-#   3. it writes a region marker document, so the harness can tell which
-#      cluster served each operation
+#   3. it writes a region marker document, so a marker GET identifies
+#      the serving region
 set -euo pipefail
 
 USERNAME="${COUCHBASE_USERNAME:-Administrator}"
@@ -158,10 +158,42 @@ create_bucket() {
     --bucket-ramsize 512 --bucket-replica "${REPLICAS}" --wait
 }
 
+# Python is already supplied by the pinned Couchbase image. Validate the
+# top-level status, not a status string inside rows or an error message.
+validate_query_response() {
+  python3 -c '
+import json, sys
+try:
+    response = json.load(sys.stdin)
+except (ValueError, TypeError) as error:
+    print("Invalid query JSON: " + str(error), file=sys.stderr)
+    sys.exit(1)
+if not isinstance(response, dict) or response.get("status") != "success" or response.get("errors"):
+    print("Query did not report success without errors", file=sys.stderr)
+    sys.exit(1)
+if len(sys.argv) > 1:
+    rows = response.get("results")
+    if rows != [1] or type(rows[0]) is not int:
+        print("Query readiness check expected results [1]", file=sys.stderr)
+        sys.exit(1)
+' "$@"
+}
+
 run_query() {
-  curl -fsS -u "${USERNAME}:${PASSWORD}" "${QUERY_URL}" \
-    --data-urlencode "statement=$1"
-  echo
+  local out code
+  if out="$(curl -fsS -u "${USERNAME}:${PASSWORD}" "${QUERY_URL}" \
+      --data-urlencode "statement=$1")"; then
+    printf '%s\n' "$out"
+    if [ "${2:-}" = "ready" ]; then
+      validate_query_response ready <<<"$out"
+    else
+      validate_query_response <<<"$out"
+    fi
+  else
+    code=$?
+    printf '%s\n' "$out"
+    return "$code"
+  fi
 }
 
 # retry_until <description> <deadline seconds> <cmd...>: runs <cmd...>
@@ -210,18 +242,23 @@ wait_for_index_service() {
   done
 }
 
+verify_primary_index_ready() {
+  run_query "SELECT RAW 1 FROM system:indexes
+    WHERE (keyspace_id = \"${BUCKET}\" OR
+      (bucket_id = \"${BUCKET}\" AND scope_id = \"_default\" AND keyspace_id = \"_default\"))
+      AND is_primary = true AND state = \"online\" LIMIT 1" ready
+}
+
 verify_marker_readable() {
-  local out
-  out="$(run_query "SELECT RAW COUNT(*) FROM \`${BUCKET}\` USE KEYS \"region::marker\" WHERE region = \"${REGION}\"" 2>/dev/null || true)"
-  echo "$out" | grep -Eq '"results"[[:space:]]*:[[:space:]]*\[[[:space:]]*1[[:space:]]*\]'
+  run_query "SELECT RAW COUNT(*) FROM \`${BUCKET}\` USE KEYS \"region::marker\" WHERE region = \"${REGION}\"" ready
 }
 
 create_index_and_marker() {
   echo "Waiting for query service..."
-  until curl -fsS -o /dev/null -u "${USERNAME}:${PASSWORD}" "${QUERY_URL}" \
-      --data-urlencode "statement=SELECT 1" >/dev/null 2>&1; do
-    sleep 3
-  done
+  if ! retry_until "query service readiness" 120 run_query "SELECT 1"; then
+    echo "FATAL: query service did not become ready within deadline" >&2
+    exit 1
+  fi
 
   wait_for_index_service
 
@@ -235,10 +272,14 @@ create_index_and_marker() {
     exit 1
   fi
 
-  # The region marker is how the harness attributes each operation to a
-  # cluster. Without it "did it switch" is guesswork, so this UPSERT gets the
-  # same retry treatment, and its success is verified by reading it back
-  # rather than trusted blindly.
+  echo "Verifying primary index on ${BUCKET} is online..."
+  if ! retry_until "primary index online on ${BUCKET}" 180 verify_primary_index_ready; then
+    echo "FATAL: primary index on ${BUCKET} did not become online within deadline" >&2
+    exit 1
+  fi
+
+  # Marker reads identify the serving region. Retry the write, then verify
+  # the expected region is readable before setup can report success.
   echo "Writing region::marker for region-${REGION} (retrying until it succeeds)..."
   if ! retry_until "UPSERT region::marker" 180 \
       run_query "UPSERT INTO \`${BUCKET}\` (KEY, VALUE) VALUES (\"region::marker\", {\"region\":\"${REGION}\"})"; then

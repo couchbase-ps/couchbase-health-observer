@@ -16,8 +16,8 @@ services:
         # makes couchbase2://cng-lb verify under TLS passthrough.
         aliases: ["cng-lb"]
     ports:
-      - "18098:18098"
-      - "19901:9901"
+      - "127.0.0.1:18098:18098"
+      - "127.0.0.1:19901:9901"
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     command:
