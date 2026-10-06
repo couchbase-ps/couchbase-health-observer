@@ -1,4 +1,4 @@
-# couchbase-health-observer — Agent Guide
+# couchbase-health-observer: Agent Guide
 
 Read first. Single source of truth for this repo, so you skip reading everything. Keep current when structure, conventions, or scope change.
 
@@ -7,8 +7,8 @@ Read first. Single source of truth for this repo, so you skip reading everything
 **Observer** for Couchbase. Detects cluster health and (later phases) drives automated multi-region failover. Built by the Couchbase Delivery team for a customer engagement. **This repo is public: no customer name, environment name, host name or credential in any file, commit message or test fixture. Use placeholders (`app-dev`, `example.com`).**
 
 Health detection has two signal paths (see durable wiki "Cluster Health Signal Detection"):
-- **SDK per-service** (`pkg/svchealth`) — SDK `ping()` reachability per service, global = worst of app's *critical* services. **Path being implemented now.**
-- **Cluster-API** (`pkg/clusterhealth`) — REST `/pools/default` + quorum-majority aggregation (UP/DEGRADED/DOWN). Sibling detector, **not yet implemented**.
+- **SDK per-service** (`pkg/svchealth`): SDK `ping()` reachability per service, global = worst of app's *critical* services. **Path being implemented now.**
+- **Cluster-API** (`pkg/clusterhealth`): REST `/pools/default` + quorum-majority aggregation (UP/DEGRADED/DOWN). Sibling detector, **not yet implemented**.
 
 Full Observer (later phases): health detector → anti-flap state machine (`FailoverDelay`) → REST `/health` API (`observe` mode) → Kubernetes actuator (ConfigMap connstring swap + `rollout restart`) → `active` mode. Failover automated, **failback manual**.
 
@@ -25,35 +25,32 @@ Two actuators, picked by `--actuators` (`k8s`, `webhook`, `k8s,webhook`; empty =
 
 ## CNG load-balancer stack
 
-Observer = passive sensor here: observe-only, no actuators. **Envoy owns switch decision**, incl. debounce. Traffic -> CNG; health check -> **Observer**, via `health_check_config.address`, literal IP only, no DNS. Hence pinned static subnet.
+PoC only, passive Observer per region; Envoy owns debounce + connection eviction.
+Runbook: `deploy/compose-cng/README.md`. Runtime: Couchbase EE8.0.1, CNG1.2.1,
+Envoy1.31.10, Java SDK3.7.4. Region-a: 3 data + 2 index/query, replica1.
+Region-b: 1 node, replica0. No XDCR; availability does not prove data continuity.
 
-Four Envoy settings default wrong for this use case:
-- `retriable_statuses` must cover **503**, else unexpected status bypasses `unhealthy_threshold`, sustained-down window is no-op.
-- `Cluster.close_connections_on_host_health_failure: true`, else SDK's established gRPC channel survives dead upstream, nothing fails over.
-- `fail_traffic_on_panic: true`, else dual outage routes to hosts already known unhealthy.
-- health-check `timeout` must exceed Observer's probe timeout: **4s here, not 2s as planned**. At 2s Observer's 503 never arrives; Envoy infers health from latency instead of reading the verdict, turning a slow-but-healthy Observer into a false failover.
+Load-bearing settings: health target = Observer at separate literal IP; HTTP503
+in `retriable_statuses`; `close_connections_on_host_health_failure=true`;
+`fail_traffic_on_panic=true`; Observer `--probe-timeout=1s` (two sequential
+pings), Envoy timeout4s. Interval5s, failures12: consecutive-failure count,
+not exact60s switch. Critical=kv; query does not drive global verdict here.
 
-Measured, reproducible from suite:
-- 1 data node lost, absorbed: 5.1s gap, no switch.
-- 2 data nodes lost: 26.4s gap, switch at ~+91s (Observer alive, 503 path).
-- whole region gone: 103 to 120s gap across 6 runs (driver-emitted, `csv_error_window_ms`), switch at +113 to +129s across 2 runs (Observer dead, connection-failure path). Slower AND ~4x worse than 2-node case: dead host gives no TCP RST, every check burns full timeout, no partial service masks the gap. Switch-time figure, unlike gap figure, NOT driver-emitted: manual offset from harness start, unverified run-by-run. Recompute from shipped CSVs gives s4 +112s, just outside band -> undocumented derivation (offset from harness start vs node stop). Treat as approximate pending a driver-emitted version.
-- both regions down: clean failure bounded by 2s KV timeout (every op takes the full ~2s to surface as error), zero hangs.
-- idle client: 60s idle gap produces no errors on resume. 3600s Envoy idle timeout itself NOT exercised (60s = 1.7% of that window).
-- harness `OPS_PER_SEC=20` paces loop iterations, not CSV rows: each iteration emits a `get` AND an `upsert` KV row, so realized CSV throughput is ~2x the config value, ~34-40 ops/sec, not 20.
+Evidence: exact region from marker GET/query only, UPSERT region unobserved.
+No-success gap != all-operation recovery. Per-operation failures + terminal
+success interval required. Fresh evidence only; old sample ranges not guarantees.
 
-Findings that changed the design's conclusions:
-- **Existing connections do not fail back.** Envoy L4 priority routing steers new connections only; `close_connections_on_host_health_failure` evicts on unhealthy, has no healthy-again equivalent. Post-recovery: long-lived clients stay on secondary, new ones go primary. Both clusters serve different clients at once, diverge by connection age.
-- **CNG's own `/health` cannot report unhealthy.** Measured 200 with all 5 region-a nodes stopped, on `couchbase/cloud-native-gateway:1.2.1`, while Observer reported DOWN. `MarkSystemUnhealthy()` has zero callers in `couchbase/stellar-gateway` on master/v1.0/v1.0.1 (only tags that repo has); 1.2.1 source itself NOT inspected, so mechanism is inferred from those branches, not confirmed for the measured image. Couchbase docs claim the opposite. Repro cheap: `test/compose-cng/lb_e2e.sh readiness`.
+Recovery splits clients: existing connections stay secondary, new connections
+choose recovered primary. Production needs coordinated manual failback control,
+gateway/data-path health, replication policy, HA and required SDK support.
+Observer health alone cannot detect dead CNG. Scenario10 tests one bootstrap-node
+loss only. Scenario6 tests60s idle, not configured3600s expiry. TLS checks server
+trust only, not mTLS. CNG readiness observation scoped to exact image/run.
 
-Closed open risks:
-- standalone CNG runs against Couchbase 8.0.1, no extra flags.
-- CNG survives losing the single node named by `--cb-host`, specifically when auto-failover absorbs that node's loss (not tested against a refused failover).
-
-LB capability checklist, derived from what Envoy actually needed: health-check an arbitrary address; close established connections when a member goes unhealthy; no automatic failback; health-check timeout above the Observer's probe timeout. Note: an LB health-checking the Observer CANNOT detect a dead gateway, because the Observer reports on the cluster, not the gateway.
-
-Auto-failover stays `timeout=30, maxCount=100`. `maxCount` is not the discriminator: quorum and replica checks are. `timeout=5` breaks `test/compose/e2e.sh`.
-
-Design and plan: `delivery vault, CNG design and plan` and `... plan.md`.
+Standalone Docker/VM deployment now documented by Couchbase. Node/Python support
+docs conflict; Java3.7.4 only SDK tested. See runbook primary-source links.
+Deferred: scenario9 DNS, kind/Operator, quorum aggregator, XDCR, production failback.
+Auto-failover: timeout30, maxCount100, quorum + replica checks discriminate loss.
 
 ## Layout
 
@@ -67,9 +64,9 @@ hack/render-manifests.sh          regenerates deploy/k8s from the chart. deploy/
 deploy/kind/          kind + official Couchbase Helm switch stack (mock-app in default, mock-app-b in app-b, webhook-receiver for scenario E). Observer itself installs from the chart with values-examples/kind.yaml.
 deploy/aws/           distributed-quorum AWS aggregation infra (Terraform): monitoring TG + quorum alarm + SNS
 deploy/compose-cng/   CNG load-balancer stack: 2 regions (cng-a 5 nodes replica 1, cng-b 1 node replica 0) on shared net cng-lb-net 172.28.0.0/16, standalone CNG 1.2.1 per region, Envoy L4 passthrough, shared-SAN certs
-harness/              Java SDK availability harness (couchbase2://), CSV per op with region marker
+harness/              Java SDK availability harness (couchbase2://), CSV + exact read/query region evidence
 test/<stack>/         per-stack tests, each independently runnable: test/compose, test/kind, test/aws, test/helm (chart lint+render, no cluster)
-HANDOFF.md            running progress log — READ THIS to see what is done and what is next
+HANDOFF.md            running progress log: READ THIS to see what is done and what is next
 ```
 
 ## Conventions
@@ -81,7 +78,7 @@ HANDOFF.md            running progress log — READ THIS to see what is done and
 - **Commit convention: gitmoji** (not Conventional Commits). Subject = `<emoji>(scope) #<issue>: <desc>` (scope and `#issue` optional), e.g. `✨(svchealth) #1: per-service rollup`, `🐛(eks-demo) #6: ...`, `📝 #5: ...`, `🎉 bootstrap`. Map: ✨ feature, 🐛 fix, 📝 docs, ✅ tests, ♻️ refactor, ⚡️ perf, 👷 CI, 🐳 docker/build, 🔧 tooling/config, 🎉 project init, 💥 breaking. `cliff.toml` groups these for the changelog (git-cliff); releases are cut by pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
 - Integration tests build-tagged `//go:build integration`, need compose cluster up.
 - Chart change = assertion first in `test/helm/render.sh`, then template, then `hack/render-manifests.sh`, then commit the regenerated `deploy/k8s`. Credentials never in args: `--pass=$(CB_PASS)` + Secret env, Kubernetes expands `$(VAR)`. RBAC = ClusterRole + RoleBinding per derived namespace, never ClusterRoleBinding. Repo is public: no customer name or value in the chart.
-- **Docs stay compressed.** `AGENTS.md`, `CLAUDE.md`, `HANDOFF.md` maintained in caveman-speak (terse, articles/filler dropped, code/commands/paths/tables exact). After editing any of them, recompress: `/caveman:compress <file>` if the caveman skill is available, else compress inline by hand. No `.original.md` backups — git is the history.
+- **Docs stay compressed.** `AGENTS.md`, `CLAUDE.md`, `HANDOFF.md` maintained in caveman-speak (terse, articles/filler dropped, code/commands/paths/tables exact). After editing any of them, recompress: `/caveman:compress <file>` if the caveman skill is available, else compress inline by hand. No `.original.md` backups: git is the history.
 
 ## Workflow
 
@@ -100,6 +97,8 @@ docker compose -f deploy/compose/docker-compose.yml up -d   # ~90s to init + loa
 go test -tags=integration ./...
 go run ./cmd/svchealthcheck --conn couchbase://localhost --critical kv   # serve /health/couchbase
 test/compose/tls_e2e.sh                        # TLS e2e: cert-path + skip-verify + negative control
+test/compose-cng/setup_test.sh                 # offline setup/port/probe-budget regressions
+test/compose-cng/evidence_test.sh              # offline workload/evidence/cleanup regressions
 test/compose-cng/lb_e2e.sh                     # CNG LB failover: scenarios 1-8 + 10 (9 deferred) + CNG readiness evidence
 test/compose-cng/lb_e2e.sh up                  # bring the LB stack up for a manual demo
 ```
@@ -113,7 +112,7 @@ Switch latch follows whatever actuator can actually move the apps: k8s enabled -
 
 CI: `ci.yml` fast gate (fmt/vet/build/unit + terraform) runs on PRs + is
 `workflow_call`ed by publish/release. `e2e.yml` runs GitHub-safe e2e in parallel
-on PRs (all green, blocking, on ubuntu-latest): compose e2e, compose TLS e2e,
+on PRs (required PR gates, on ubuntu-latest): compose e2e, compose TLS e2e,
 kind switch-lambda, kind region-switch, compose-cng-lb-e2e (60min timeout,
 uploads `/tmp/cng-lb-out` as artifact `cng-lb-output` always; unvalidated
 until its first green PR run). AWS e2e

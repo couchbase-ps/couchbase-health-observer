@@ -108,6 +108,13 @@ files.
 Support status: the observer is a Couchbase **Delivery team** artifact, maintained on a
 best-effort basis. It is not a product release and is not covered by product support.
 
+## CNG and Envoy proof of concept
+
+A separate Compose stack tests failover of an existing Java SDK client through CNG
+and Envoy. Observer provides health; Envoy closes unhealthy connections and selects
+the secondary region. Setup, scenarios, evidence definitions and production limits:
+[deploy/compose-cng/README.md](deploy/compose-cng/README.md).
+
 ## Observer health & observability
 
 The observer serves three **separate** signals — never conflate them:
