@@ -27,6 +27,37 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## CNG quiet-host full validation (2026-10-06)
+
+Defaultclean d241a2d GREEN,driver0: setup +s1-8/10 +TLS +readiness. S9 deferred.
+S1 1014ok/0err; s2 4106ok/18err,gap5060ms,allopsrecovered,regiona only.
+S3 gap26370ms,firstb68892ms afterfault; s4 gap112542ms,firstb112666ms.
+S7 old8501ok b/new1059ok a,overlap559b/542a exactreads,0err.
+S10 5027ok/24err,gap7065ms,allopsrecovered,regiona. S5 16KVerrors/0ok,
+noquerysamples; SQLdualoutage unproved. S6 4163ok/0err,60s idle only.
+Readiness: all5backendnodes stopped,ObserverDOWN/CNGhealth200; narrowimage/run.
+
+ElevenCSV summaries independently recomputed. Resource +faulthealth +Docker
+exit/OOM +image +survivorDB snapshots retained. Hostswap0; sampledVMavailable
+>10GiB; faultphase peakload11.19; noOOMflags/unexpectedgatewayexit/panic observed.
+Ownedfixtures +collectors removed/stopped. No assertions weakened or crashrestart
+added. Setup38/evidence37,Java10,Go unit/race/vet/build,gofmt,Bashsyntax,
+Helm4.1.4 +manifestdrift,Envoy1.31.10 validation green. Xcode initialblock
+resolved by user; native rerun green. Remote main still5876695; no rebase needed.
+
+Auth source audit: cli.rpcCli assigned202,Close called146/152 beforeinit;
+syntheticcancel reproduces166/152+0x9d8 on image/current revisions,then leakcheck
+fails (blockedreader send). Diagnostic,not livegatewayproof. KV callback-order
+candidate unchanged. Jira GET-only: related oldfixes notexact; no confirmed
+supportedremedy/workaround. CNGpubliclatest1.2.1,Server8.0.3 (7.6line7.6.12).
+Quietpass does notrepair sourcepaths or prove originalpressurecause; Server/
+host differ. Customerdoc now separates priorfailures/currentgreen +limits.
+
+Localbranch review complete. Merge/customer acceptance STILL BLOCKED: vendor
+remedy +validated recoverypolicy,both gateway/data and DBhealth,required
+PRCI. ProductionHA/XDCR/coordinatedfailback remain deferred. No push/merge/Jira
+writes. Newprivatevault continuation +evidence preserve oldfailedproof.
+
 ## CNG quiet-host setup readback correction (2026-10-06)
 
 Bundle SHA verified; clean feat/cng-lb-failover restored at a855bd1.

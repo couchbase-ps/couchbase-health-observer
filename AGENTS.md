@@ -26,7 +26,7 @@ Two actuators, picked by `--actuators` (`k8s`, `webhook`, `k8s,webhook`; empty =
 ## CNG load-balancer stack
 
 PoC only, passive Observer per region; Envoy owns debounce + connection eviction.
-Runbook: `deploy/compose-cng/README.md`. Runtime: Couchbase EE8.0.1, CNG1.2.1,
+Runbook: `deploy/compose-cng/README.md`. Runtime: Couchbase EE8.0.3, CNG1.2.1,
 Envoy1.31.10, Java SDK3.7.4. Region-a: 3 data + 2 index/query, replica1.
 Region-b: 1 node, replica0. No XDCR; availability does not prove data continuity.
 
