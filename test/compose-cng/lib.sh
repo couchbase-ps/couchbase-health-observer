@@ -340,6 +340,7 @@ cleanup_harnesses() {
 }
 
 capture_artifacts() {
+  local exit_status="${1:-0}"
   [ -d "$OUT_DIR" ] || return 0
   docker version >"$OUT_DIR/docker-version.txt" 2>&1 || true
   $COMPOSE_A config >"$OUT_DIR/compose-a.yml" 2>&1 || true
@@ -354,6 +355,21 @@ capture_artifacts() {
     image="$(docker inspect --format '{{.Image}}' "$node" 2>/dev/null)" || continue
     docker image inspect --format '{"id":{{json .Id}},"digests":{{json .RepoDigests}},"os":{{json .Os}},"architecture":{{json .Architecture}}}' "$image" >"$OUT_DIR/$node.image.json" 2>&1 || true
   done
+  if [ "$exit_status" -ne 0 ]; then
+    # Internal server logs explain init/join failures that docker logs omits.
+    # Copy only these test nodes and four diagnostic files, before teardown.
+    local log
+    for node in $REGION_A_NODES cb-b-node-1; do
+      if ! mkdir -p "$OUT_DIR/$node.internal"; then
+        echo "WARNING: cannot create diagnostic directory $OUT_DIR/$node.internal; skipping internal logs" >&2 || true
+        continue
+      fi
+      for log in error.log debug.log babysitter.log memcached.log; do
+        docker cp "$node:/opt/couchbase/var/lib/couchbase/logs/$log" \
+          "$OUT_DIR/$node.internal/$log" >>"$OUT_DIR/$node.internal/capture.log" 2>&1 || true
+      done
+    done
+  fi
 }
 
 # node_membership <pools/default json> <node short name> -> prints the

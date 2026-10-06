@@ -769,7 +769,7 @@ capture_cng_readiness() {
 cleanup() {
   local status=$? workload_status=0
   trap - EXIT
-  capture_artifacts
+  capture_artifacts "$status"
   cleanup_harnesses || workload_status=$?
   if [ "$status" -eq 0 ] && [ "$workload_status" -ne 0 ]; then status="$workload_status"; fi
   if [ "${CLEANUP_STACK:-0}" -eq 1 ]; then stack_down; fi

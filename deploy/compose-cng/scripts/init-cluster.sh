@@ -40,10 +40,8 @@ if [ "${#QUERY_NODES[@]}" -gt 0 ] && [ -n "${QUERY_NODES[0]:-}" ]; then
 fi
 QUERY_URL="http://${QUERY_HOST}:8093/query/service"
 
-# Counts nodes actually added this run, so rebalance only fires when there is
-# something to rebalance. Region-b passes empty node lists, so this stays 0
-# there and the ${#arr[@]:-0} array-length-defaulting bug (invalid bash, and
-# never exercised except on the region-b empty-list path) is avoided entirely.
+# Counts healthy inactiveAdded members needing rebalance, including joins
+# partially applied by a CLI error or left pending from an earlier run.
 ADDED=0
 
 wait_for_node() {
@@ -66,28 +64,91 @@ all_nodes_ready() {
   done
 }
 
+read_cluster_state() {
+  curl --connect-timeout 2 --max-time 5 -kfsS -u "${USERNAME}:${PASSWORD}" "${SECURE_URL}/pools/default"
+}
+
+# Validate authenticated readback against env, never CLI exit status alone.
+# Missing member returns 2, so only a genuinely absent node can be added.
+validate_cluster_state() {
+  python3 -c '
+import json, sys
+mode, region, *expected = sys.argv[1:]
+def fail(message, code=1):
+    print("Cluster state: " + message, file=sys.stderr)
+    sys.exit(code)
+try:
+    state = json.load(sys.stdin)
+except (ValueError, TypeError) as error:
+    fail("invalid JSON: " + str(error))
+if not isinstance(state, dict) or state.get("clusterName") != "region-" + region:
+    fail("unexpected clusterName")
+nodes = state.get("nodes")
+if not isinstance(nodes, list) or any(not isinstance(n, dict) for n in nodes):
+    fail("missing nodes array")
+hostnames = [n.get("hostname") for n in nodes]
+if any(not isinstance(h, str) for h in hostnames) or len(set(hostnames)) != len(hostnames):
+    fail("invalid or duplicate hostname")
+services = {"data": "kv", "query": "n1ql", "index": "index"}
+wanted = {}
+for entry in expected:
+    name, configured = entry.split("=", 1)
+    wanted[name + ".local:8091"] = sorted(services[s] for s in configured.split(","))
+if mode == "topology" and set(hostnames) != set(wanted):
+    fail("node names/count differ from expected topology")
+for hostname, assigned in wanted.items():
+    matching = [n for n in nodes if n.get("hostname") == hostname]
+    if not matching:
+        fail("missing member " + hostname, 2)
+    node = matching[0]
+    actual = node.get("services")
+    if not isinstance(actual, list) or any(not isinstance(s, str) for s in actual) or sorted(actual) != assigned:
+        fail("unexpected services for " + hostname)
+    if node.get("status") != "healthy":
+        fail("member not healthy: " + hostname)
+    membership = node.get("clusterMembership")
+    allowed = ("active", "inactiveAdded") if mode == "node" else ("active",)
+    if membership not in allowed:
+        fail("unexpected membership for " + hostname + ": " + str(membership))
+    if mode == "node":
+        print(membership)
+' "$@"
+}
+
+primary_is_configured() {
+  local state
+  state="$(read_cluster_state)" || return $?
+  validate_cluster_state primary "$REGION" "${PRIMARY}=${PRIMARY_SERVICES}" <<<"$state"
+}
+
+initialize_primary_attempt() {
+  local out state
+  if state="$(read_cluster_state)"; then
+    validate_cluster_state primary "$REGION" "${PRIMARY}=${PRIMARY_SERVICES}" <<<"$state"
+    return $?
+  fi
+  if ! out="$("${CLI}" cluster-init \
+      --cluster "${URL}" --cluster-name "region-${REGION}" \
+      --cluster-username "${USERNAME}" --cluster-password "${PASSWORD}" \
+      --services "${PRIMARY_SERVICES}" --cluster-ramsize "${CLUSTER_RAM_SIZE_MB}" \
+      --cluster-index-ramsize "${INDEX_RAM_SIZE_MB}" --index-storage-setting default 2>&1)"; then
+    printf '%s\n' "$out" >&2
+  fi
+  primary_is_configured
+}
+
 initialize_primary() {
-  if curl --connect-timeout 2 --max-time 5 -fsS -u "${USERNAME}:${PASSWORD}" "${URL}/pools/default" >/dev/null 2>&1; then
+  local state
+  if state="$(read_cluster_state 2>/dev/null)"; then
+    validate_cluster_state primary "$REGION" "${PRIMARY}=${PRIMARY_SERVICES}" <<<"$state" || return $?
     echo "Primary already initialized."
-    return
+    return 0
   fi
   echo "Initializing primary with services: ${PRIMARY_SERVICES}"
-  # Couchbase 8.0.1 refuses a bare, dot-less --node-init-hostname ("Short
-  # names are not allowed"). ${PRIMARY} itself stays exactly the env-contract
-  # value (no dot, used unchanged for the API URL above and for the
-  # observer's connection string); only the value announced to Couchbase
-  # gets the ".local" suffix, matching the compose hostname/alias below and
-  # the same convention deploy/compose/scripts/init-cluster.sh already uses.
-  "${CLI}" node-init --cluster "${URL}" --node-init-hostname "${PRIMARY}.local"
-  "${CLI}" cluster-init \
-    --cluster "${URL}" \
-    --cluster-name "region-${REGION}" \
-    --cluster-username "${USERNAME}" \
-    --cluster-password "${PASSWORD}" \
-    --services "${PRIMARY_SERVICES}" \
-    --cluster-ramsize "${CLUSTER_RAM_SIZE_MB}" \
-    --cluster-index-ramsize "${INDEX_RAM_SIZE_MB}" \
-    --index-storage-setting default
+  # Couchbase requires an FQDN; URLs keep the env short name.
+  retry_until "node-init ${PRIMARY}" 300 "${CLI}" node-init \
+    --cluster "${URL}" --node-init-hostname "${PRIMARY}.local" || return $?
+  retry_until "cluster-init region-${REGION}" 300 initialize_primary_attempt || return $?
 }
 
 wait_for_authenticated_cluster() {
@@ -97,29 +158,49 @@ wait_for_authenticated_cluster() {
 }
 
 node_is_clustered() {
-  # Nodes are registered under their ".local" FQDN (see add_node), so that is
-  # what pools/default reports back.
-  curl --connect-timeout 2 --max-time 5 -kfsS -u "${USERNAME}:${PASSWORD}" "${SECURE_URL}/pools/default" \
-    | grep -q "\"hostname\":\"$1.local:8091\""
+  local state
+  state="$(read_cluster_state)" || return $?
+  validate_cluster_state node "$REGION" "$1=${2:-data}" <<<"$state"
+}
+
+add_node_attempt() {
+  local node="$1" services="$2" state status out
+  state="$(read_cluster_state)" || return $?
+  if validate_cluster_state node "$REGION" "${node}=${services}" <<<"$state"; then
+    return 0
+  else
+    status=$?
+    [ "$status" -eq 2 ] || return "$status"
+  fi
+  if ! out="$("${CLI}" server-add \
+      --cluster "${SECURE_URL}" --username "${USERNAME}" --password "${PASSWORD}" \
+      --server-add "https://${node}.local:18091" \
+      --server-add-username "${USERNAME}" --server-add-password "${PASSWORD}" \
+      --services "${services}" --no-ssl-verify 2>&1)"; then
+    printf '%s\n' "$out" >&2
+  fi
+  node_is_clustered "$node" "$services"
 }
 
 add_node() {
-  local node="$1" services="$2"
-  if node_is_clustered "${node}"; then
-    echo "${node} already in cluster."
-    return
-  fi
-  echo "Adding ${node} (${services})"
-  # ".local" suffix: same short-name restriction as node-init, and the joining
-  # node's self-signed cert SAN is generated from its own compose hostname
-  # (also ".local", see docker-compose.region-*.yml), so the two must match
-  # for the TLS handshake during join to pass hostname verification.
-  "${CLI}" server-add \
-    --cluster "${SECURE_URL}" --username "${USERNAME}" --password "${PASSWORD}" \
-    --server-add "https://${node}.local:18091" \
-    --server-add-username "${USERNAME}" --server-add-password "${PASSWORD}" \
-    --services "${services}" --no-ssl-verify
-  ADDED=$((ADDED+1))
+  local node="$1" services="$2" membership
+  echo "Converging ${node} (${services})"
+  retry_until "server-add ${node}" 300 add_node_attempt "$node" "$services" || return $?
+  membership="$(node_is_clustered "$node" "$services")" || return $?
+  # retry_until runs attempts in subshells. Count pending rebalance here.
+  if [ "$membership" = inactiveAdded ]; then ADDED=$((ADDED+1)); fi
+}
+
+verify_cluster_topology() {
+  local state node expected=("${PRIMARY}=${PRIMARY_SERVICES}")
+  for node in "${DATA_NODES[@]:-}"; do
+    if [ -n "$node" ]; then expected+=("${node}=data"); fi
+  done
+  for node in "${QUERY_NODES[@]:-}"; do
+    if [ -n "$node" ]; then expected+=("${node}=index,query"); fi
+  done
+  state="$(read_cluster_state)" || return $?
+  validate_cluster_state topology "$REGION" "${expected[@]}" <<<"$state"
 }
 
 rebalance() {
@@ -297,6 +378,8 @@ for n in "${QUERY_NODES[@]:-}"; do if [ -n "$n" ]; then add_node "$n" index,quer
 if [ "${ADDED}" -gt 0 ]; then
   rebalance
 fi
+
+retry_until "region-${REGION} active topology" 300 verify_cluster_topology || exit $?
 
 configure_autofailover
 create_bucket

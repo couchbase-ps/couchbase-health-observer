@@ -348,8 +348,58 @@ PYPARTIAL
   ( CLEANUP_STACK=0; trap cleanup EXIT; scenario_7 || exit $? ) >"$WORK/manual-output" 2>&1 || status=$?
   [ "$status" -ne 0 ] && [ ! -f "$WORK/owned-active" ] && [ ! -f "$WORK/teardown" ]
 }
+failure_internal_logs() {
+  docker() { echo "$*" >>"$WORK/docker-calls"; if [ "$1" = inspect ]; then echo image; fi; }
+  : >"$WORK/docker-calls"
+  ( CLEANUP_STACK=0; trap cleanup EXIT; exit 0 ) >"$WORK/output" 2>&1 || return 1
+  if grep -Eq '^cp |^exec .*couchbase/logs' "$WORK/docker-calls"; then echo 'successful run copied internal logs'; return 1; fi
+  : >"$WORK/docker-calls"
+  stack_down() { echo teardown >>"$WORK/docker-calls"; }
+  local status=0
+  ( CLEANUP_STACK=1; trap cleanup EXIT; exit 9 ) >"$WORK/output" 2>&1 || status=$?
+  [ "$status" -eq 9 ] || { echo "cleanup changed exit9 to$status"; return 1; }
+  python3 - "$WORK/docker-calls" <<'PYLOGS'
+import sys
+calls=open(sys.argv[1]).read().splitlines()
+logs=[(i,line) for i,line in enumerate(calls) if line.startswith('cp ') and '/opt/couchbase/var/lib/couchbase/logs/' in line]
+assert logs, 'failure path did not preserve internal Couchbase logs'
+expected={'cb-a-data-1','cb-a-data-2','cb-a-data-3','cb-a-iq-1','cb-a-iq-2','cb-b-node-1'}
+assert {line.split()[1].split(':')[0] for _,line in logs} == expected, logs
+allowed={'error.log','debug.log','babysitter.log','memcached.log'}
+assert {line.split()[1].rsplit('/',1)[1] for _,line in logs} == allowed, logs
+assert max(i for i,_ in logs) < calls.index('teardown'), calls
+PYLOGS
+}
+
+failure_internal_log_directory() {
+  export OUT_DIR="$WORK/collision-out"
+  mkdir -p "$OUT_DIR"
+  # Fresh shell retains errexit; suite conditionals would suppress it in a subshell.
+  sed -n '/^cleanup() {/,/^}$/p' "$REPO/test/compose-cng/lb_e2e.sh" >"$WORK/cleanup-functions.sh"
+  cat >"$WORK/diagnostic-failure.sh" <<'SH'
+set -Eeuo pipefail
+source "$1/test/compose-cng/lib.sh"
+source "$2"
+DIAGNOSTIC_WORK="$3"
+docker() { echo "$*" >>"$DIAGNOSTIC_WORK/diagnostic-calls"; }
+cleanup_harnesses() { echo workload-cleanup >>"$DIAGNOSTIC_WORK/diagnostic-calls"; }
+stack_down() { echo teardown >>"$DIAGNOSTIC_WORK/diagnostic-calls"; }
+CLEANUP_STACK=1
+trap cleanup EXIT
+exit 9
+SH
+  echo collision >"$OUT_DIR/cb-a-data-1.internal"
+  : >"$WORK/diagnostic-calls"
+  local status=0
+  bash "$WORK/diagnostic-failure.sh" "$REPO" "$WORK/cleanup-functions.sh" "$WORK" >"$WORK/output" 2>&1 || status=$?
+  [ "$status" -eq 9 ] || { cat "$WORK/output"; echo "diagnostic directory failure changed exit9 to$status"; return 1; }
+  grep -q 'WARNING.*cb-a-data-1.internal' "$WORK/output" || { echo 'diagnostic directory failure lacks warning'; return 1; }
+  grep -q '^workload-cleanup$' "$WORK/diagnostic-calls" && grep -q '^teardown$' "$WORK/diagnostic-calls" || { echo 'diagnostic failure skipped cleanup'; return 1; }
+  grep -q '^cp cb-a-data-2:/opt/couchbase/var/lib/couchbase/logs/error.log ' "$WORK/diagnostic-calls" || { echo 'diagnostic failure stopped remaining node capture'; return 1; }
+}
+
 failed=0
-for test in ${EVIDENCE_TESTS:-empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure init_deadline init_success summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
+for test in ${EVIDENCE_TESTS:-failure_internal_logs failure_internal_log_directory empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure init_deadline init_success summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
   if ( FAIL=0; "$test" ); then echo "PASS: $test"; else echo "FAIL: $test"; failed=$((failed+1)); fi
 done
 [ "$failed" -eq 0 ]
