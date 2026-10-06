@@ -530,8 +530,46 @@ late_ready_prevents_fault() {
   grep -q 'readiness did not validate within 90s' "$WORK/output"
 }
 
+inspect_oom_metadata() {
+  docker() {
+    case "$1" in
+      inspect)
+        python3 - "$3" <<'PYINSPECT'
+import json, re, sys
+# Dummy values, render only fields requested by the actual capture format.
+fields = {
+    '.Config.Image': 'example/image:dummy', '.Image': 'sha256:dummy',
+    '.State.Running': False, '.State.Status': 'exited', '.State.ExitCode': 137,
+    '.State.OOMKilled': True, '.State.Error': 'example failure: "dummy"',
+    '.State.StartedAt': '2026-01-01T00:00:00Z',
+    '.State.FinishedAt': '2026-01-01T00:01:00Z', '.HostConfig.Memory': 268435456,
+}
+def render(match):
+    value = fields[match[2]]
+    return json.dumps(value) if match[1] or not isinstance(value, str) else value
+print(re.sub(r'\{\{(json )?(\.[A-Za-z.]+)\}\}', render, sys.argv[1]))
+PYINSPECT
+        ;;
+      *) : ;;
+    esac
+  }
+  capture_artifacts 0 || return 1
+  python3 - "$OUT_DIR/cng-a.inspect.json" <<'PYOOM'
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert m['image'] == 'example/image:dummy' and m['image_id'] == 'sha256:dummy'
+assert m['running'] is False
+assert m.get('status') == 'exited', 'missing container exit state'
+assert m.get('exit_code') == 137, 'missing diagnostic exit code'
+assert m.get('oom_killed') is True, 'missing OOM evidence'
+assert m.get('error') == 'example failure: "dummy"', 'missing or incorrectly escaped state error'
+assert m.get('started_at') == '2026-01-01T00:00:00Z'
+assert m.get('finished_at') == '2026-01-01T00:01:00Z'
+assert m.get('memory_limit_bytes') == 268435456, 'missing configured memory limit'
+PYOOM
+}
 failed=0
-for test in ${EVIDENCE_TESTS:-late_ready_prevents_fault dead_ready_client invalid_ready_body harness_readiness startup_failure_prevents_fault wrong_region_readiness negative_driver_policy s5_disables_positive_warmup s8_disables_positive_warmup failure_internal_logs failure_internal_log_directory empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure init_deadline init_success summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
+for test in ${EVIDENCE_TESTS:-inspect_oom_metadata late_ready_prevents_fault dead_ready_client invalid_ready_body harness_readiness startup_failure_prevents_fault wrong_region_readiness negative_driver_policy s5_disables_positive_warmup s8_disables_positive_warmup failure_internal_logs failure_internal_log_directory empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure init_deadline init_success summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
   if ( FAIL=0; "$test" ); then echo "PASS: $test"; else echo "FAIL: $test"; failed=$((failed+1)); fi
 done
 [ "$failed" -eq 0 ]

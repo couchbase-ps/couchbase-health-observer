@@ -404,7 +404,7 @@ capture_artifacts() {
   local node
   for node in $REGION_A_NODES cng-a cb-a-observer cb-b-node-1 cng-b cb-b-observer cng-envoy cb-a-init cb-b-init; do
     docker logs "$node" >"$OUT_DIR/$node.log" 2>&1 || true
-    docker inspect --format '{"image":{{json .Config.Image}},"image_id":{{json .Image}},"running":{{.State.Running}}}' "$node" >"$OUT_DIR/$node.inspect.json" 2>&1 || true
+    docker inspect --format '{"image":{{json .Config.Image}},"image_id":{{json .Image}},"running":{{.State.Running}},"status":{{json .State.Status}},"exit_code":{{.State.ExitCode}},"oom_killed":{{.State.OOMKilled}},"error":{{json .State.Error}},"started_at":{{json .State.StartedAt}},"finished_at":{{json .State.FinishedAt}},"memory_limit_bytes":{{.HostConfig.Memory}}}' "$node" >"$OUT_DIR/$node.inspect.json" 2>&1 || true
     local image
     image="$(docker inspect --format '{{.Image}}' "$node" 2>/dev/null)" || continue
     docker image inspect --format '{"id":{{json .Id}},"digests":{{json .RepoDigests}},"os":{{json .Os}},"architecture":{{json .Architecture}}}' "$image" >"$OUT_DIR/$node.image.json" 2>&1 || true

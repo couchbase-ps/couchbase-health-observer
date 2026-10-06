@@ -27,6 +27,13 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## CNG OOM/exit diagnostic capture (2026-10-06)
+
+Compact inspect retains image/image_id/running; adds status,exit_code,oom_killed,
+error,started_at,finished_at,memory_limit_bytes. Scoped testcontainers only.
+Quoted strings JSON-safe. Red missingexitstate then green; evidence37 +syntax
++diffchecks green. Independent scoped review approved. No runtime behavior change.
+
 ## CNG latest-image follow-up (2026-10-06)
 
 Registry checked +fresh pulls: CNG1.2.1 unchanged digest a97b198f; Server8.0.3
