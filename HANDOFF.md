@@ -27,6 +27,16 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## CNG quiet-host setup readback correction (2026-10-06)
+
+Bundle SHA verified; clean feat/cng-lb-failover restored at a855bd1.
+Archived init log +regression confirm curl28 escaped final membership read,
+after server-add retry success. Final read now inside same300s convergence;
+retry checks existing member before add, pending rebalance counted in parent.
+No budget/assertion change. Transient readback red(curl28) ->green; persistent
+transport remains bounded failure. Setup38/evidence37 green, syntax/diff green.
+Full quiet-host proof pending. Both CNG panic paths remain separate blockers.
+
 ## CNG transfer handover (2026-10-06)
 
 User stopped investigation: overloadedhost, continue elsewhere. Image pins +OOM

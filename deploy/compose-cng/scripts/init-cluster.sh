@@ -182,11 +182,25 @@ add_node_attempt() {
   node_is_clustered "$node" "$services"
 }
 
+# Keep the final membership read inside the same convergence budget. An
+# intermittent transport failure after a successful join must retry readback;
+# the next attempt checks existing membership before considering server-add.
+add_node_with_membership() {
+  local out status
+  if out="$(add_node_attempt "$@" 2>&1)"; then
+    node_is_clustered "$@"
+  else
+    status=$?
+    printf '%s\n' "$out" >&2
+    return "$status"
+  fi
+}
+
 add_node() {
   local node="$1" services="$2" membership
   echo "Converging ${node} (${services})"
-  retry_until "server-add ${node}" 300 add_node_attempt "$node" "$services" || return $?
-  membership="$(node_is_clustered "$node" "$services")" || return $?
+  retry_until "server-add ${node}" 300 add_node_with_membership "$node" "$services" || return $?
+  membership="$RETRY_OUTPUT"
   # retry_until runs attempts in subshells. Count pending rebalance here.
   if [ "$membership" = inactiveAdded ]; then ADDED=$((ADDED+1)); fi
 }
@@ -298,6 +312,7 @@ retry_until() {
     sleep "$delay"
     if [ "$delay" -lt 15 ]; then delay=$((delay * 2)); fi
   done
+  RETRY_OUTPUT="$out"
 }
 
 # wait_for_index_service: the query service can answer "SELECT 1" before the

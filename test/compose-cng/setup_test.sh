@@ -357,6 +357,26 @@ join_transient_retry() {
   add_node cb-a-data-2 data >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
   [ "$ADDED" -eq 1 ] && [ "$(cat "$WORK/server-add-count")" -eq 2 ]
 }
+# A successful join readback followed by a transport timeout must not escape
+# convergence, lose the pending rebalance, or duplicate server-add.
+join_transport_readback() {
+  startup_fixture; primary_state
+  echo 0 >"$WORK/reads"
+  curl() {
+    local n
+    n="$(cat "$WORK/reads")"; n=$((n+1)); echo "$n" >"$WORK/reads"
+    if [ "$n" -eq 3 ]; then echo 'curl: (28) readback timeout' >&2; return 28; fi
+    cat "$WORK/cluster.json"
+  }
+  add_node cb-a-data-2 data >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
+  [ "$ADDED" -eq 1 ] && [ "$(cat "$WORK/server-add-count")" -eq 1 ]
+}
+join_transport_permanent() {
+  startup_fixture; primary_state
+  curl() { echo 'curl: (28) persistent readback timeout' >&2; return 28; }
+  if add_node cb-a-data-2 data >"$WORK/output" 2>&1; then echo 'transport failure accepted'; return 1; fi
+  [ "$ADDED" -eq 0 ] && grep -q 'within 300s' "$WORK/output" && grep -q 'persistent readback timeout' "$WORK/output"
+}
 join_partial_readback() {
   startup_fixture; primary_state; JOIN_PARTIAL=1
   add_node cb-a-data-2 data >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
@@ -450,7 +470,7 @@ JSONEDIT
 }
 
 failed=0
-for test in ${SETUP_TESTS:-primary_node_init_failure primary_transient_retry primary_partial_readback primary_wrong_configuration primary_permanent_failure join_transient_retry join_partial_readback join_existing_membership join_permanent_failure join_wrong_state primary_success_without_readback join_success_without_readback join_partial_wrong_readback partial_join_rebalanced_before_configured topology_before_configured transport_failure sql_failure nested_success invalid_response valid_response transient_retry persistent_failure marker_readiness index_readiness setup_verifies_readiness bounded_init_request node_deadline auth_deadline index_deadline readiness_success all_init_requests_bounded network_create_failure network_existing_subnet probe_budget latest_images local_ports}; do
+for test in ${SETUP_TESTS:-primary_node_init_failure primary_transient_retry primary_partial_readback primary_wrong_configuration primary_permanent_failure join_transient_retry join_transport_readback join_transport_permanent join_partial_readback join_existing_membership join_permanent_failure join_wrong_state primary_success_without_readback join_success_without_readback join_partial_wrong_readback partial_join_rebalanced_before_configured topology_before_configured transport_failure sql_failure nested_success invalid_response valid_response transient_retry persistent_failure marker_readiness index_readiness setup_verifies_readiness bounded_init_request node_deadline auth_deadline index_deadline readiness_success all_init_requests_bounded network_create_failure network_existing_subnet probe_budget latest_images local_ports}; do
   if ( "$test" ); then
     echo "PASS: $test"
   else
