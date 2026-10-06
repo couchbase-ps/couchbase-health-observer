@@ -9,9 +9,20 @@ query transport/SQL errors now fail + retry; online primary index + exact marker
 readback required. All CNG host ports bind127.0.0.1. Observer explicit per-ping1s,
 Envoy4s clears both sequential pings. Twelve offline setup regressions pass.
 
-Remaining review corrections: trustworthy operation/region evidence, workload
-completion guards, pre-teardown logs, customer runbook, vault reconciliation,
-fresh full suite + final review. Historical Tasks1-13 completion did not prove
+Go test/race/vet/build, Helm lint/render and pinned Envoy validation passed.
+Vault generated design/evidence corrected; old plan marked superseded.
+qmd update/embed failed: Node ABI141 versus147.
+
+Evidence corrections reviewed + green:23 offline evidence regressions,2 Java
+unit tests + package. Exact GET/query region only, UPSERT unknown; timestamps
+start requests. No-success gap separate from per-operation terminal recovery.
+Fault summaries + overlap proof + same-run passed-s2 gate + readiness200/503
+observation. Init status + stopped-node membership verified. Labelled workloads
+retain partial evidence and stop before teardown on early failure. CI runs
+setup/evidence/Java unit gates.
+
+Remaining: customer runbook final review, history sanitization, fresh full suite
++ final review. Historical Tasks1-13 completion did not prove
 customer readiness. Prior no-success gap != full recovery; prior timings not RTO.
 
 Deferred: scenario9 DNS, kind/Operator, quorum, XDCR, production failback control.
