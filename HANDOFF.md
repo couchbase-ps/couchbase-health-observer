@@ -2,6 +2,30 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## CNG transfer handover (2026-10-06)
+
+User stopped investigation: overloadedhost, continue elsewhere. Image pins +OOM
+capture committed dcdffb7/da72c7f. Setup36/evidence37 +syntax/diff green; scoped
+review approved. No push/merge. Main +unrelatedjobs untouched; ownfixtures removed.
+
+LatestServer8.0.3 attempts both failed setup: first management300s +ALE log-sink
+startuptimeouts; own remaining rebuild cancelled after failure. Cached retry:
+Observer binaries identical, regions serial, no compilation; five management APIs
++primary/auth passed, node2 convergence curl28 ->init28 ->driver1. No latest fault
+scenario. Review transport readback retry path, do not weaken budgets.
+
+Final capture found SECOND, different CNGpanic after cached setupfailed:
+cbauthx.RevRpcClient.Close revrpcclient.go166 <-NewCbAuthClient cbauthclient.go152.
+Exit09:34:05Z,code2,OOMKilledfalse after auth reconnecttimeouts. Source/Jira audit
+for this stack NOT done. Do not conflate with original kvClient.close339.
+
+Host active swap +CPU saturation confounds runtime. CNG1.2.1 freshpull same digest;
+public current close path unchanged. Synthetic callback-order check matches339,
+not actualgateway reproduction. Exact cause +load contribution unproved. Jira
+read-only review: related open lifecycle races, no exactfix/workaround established.
+Vault handover +private evidence +portable branchbundle hold continuation details.
+NOGO persists; restartmasking/thresholdrelaxation not added.
+
 ## CNG OOM/exit diagnostic capture (2026-10-06)
 
 Compact inspect retains image/image_id/running; adds status,exit_code,oom_killed,
@@ -21,8 +45,7 @@ Scoped independent review approved. Latest live run in progress; prior NOGO hold
 Fresh e451b7f proof: setup +s1passed (979ops,0errors). s2failed: CNG1.2.1
 nil-pointer panic in gocbcorex kvClient.close, image7eeb2138 arm64. Cluster
 absorbed node loss (autoFailover count1, twohealthy active data nodes), gateway
-processdead; workload66errors,139907ms no-successgap, noB response. Gateway-health
-blindspot realized. Suite stopped; s3-8/10/readiness NOT proven by this run.
+processdead; workload66errors,139907ms no-successgap, noB response. Gateway and database failure modes separate; postfault Observer/Envoy readings absent. Suite stopped; s3-8/10/readiness NOT proven by this run.
 
 Do not claim customerready/mergevalidated. Need vendor-supportedgatewayfix/version
 +validatedgateway-health/recoverypolicy, then fullcleanproof +PRCI. No thresholds
