@@ -4,6 +4,12 @@ This stack tests whether an existing Java SDK client can reconnect through a loa
 
 The tested path is Java SDK 3.7.4 -> Envoy TCP proxy -> CNG 1.2.1 -> Couchbase Server EE 8.0.1. TLS passes through Envoy to CNG. One passive Observer checks each region. Envoy reads the Observer verdict and decides when to move connections.
 
+## Current validation result (2026-10-06)
+
+**Not ready for customer sign-off or merge validation.** Fresh arm64 run on commit `e451b7f` passed setup and the healthy baseline (979 operations, zero measured errors). Scenario 2 then failed: CNG 1.2.1 crashed with a nil-pointer panic in `gocbcorex.(*kvClient).close` after one data node stopped. Couchbase auto-failover completed and the two remaining data nodes were healthy, but the workload did not recover. It recorded 66 errors and a 139,907 ms no-success gap. No region-b response was observed.
+
+This confirms that gateway failure must be considered separately from database health. The current Observer-only health configuration does not provide that combined signal. The full suite stopped at this failure; later scenarios were not accepted as proven by this run. A vendor-supported gateway fix/version and a validated gateway-health or recovery policy are required before claiming completion. Unit tests and static review do not replace this failed live gate.
+
 ## Run the test
 
 Use a dedicated test host with Docker Engine, Docker Compose v2, Bash, curl, jq, OpenSSL and Python 3. The stack starts six Couchbase Server containers, two gateways, two Observers, Envoy and a Java workload. Docker builds Java and Go images; no host JDK or Maven is needed. Allow about one hour, including first-time image downloads. CI sets a 60-minute limit. Resource use depends on the Docker host; provide sufficient free memory for all six database containers and avoid concurrent heavy tests.

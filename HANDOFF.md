@@ -2,6 +2,21 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## CNG live gate BLOCKED (2026-10-06)
+
+Fresh e451b7f proof: setup +s1passed (979ops,0errors). s2failed: CNG1.2.1
+nil-pointer panic in gocbcorex kvClient.close, image7eeb2138 arm64. Cluster
+absorbed node loss (autoFailover count1, twohealthy active data nodes), gateway
+processdead; workload66errors,139907ms no-successgap, noB response. Gateway-health
+blindspot realized. Suite stopped; s3-8/10/readiness NOT proven by this run.
+
+Do not claim customerready/mergevalidated. Need vendor-supportedgatewayfix/version
++validatedgateway-health/recoverypolicy, then fullcleanproof +PRCI. No thresholds
+weakened, no gatewayrestart added to mask crash. All localcorrections committed;
+main/remoteuntouched. Raw proof +panic archived in vault note-localattachments.
+Offline setup35/evidence36/Java10green; Go/race/vet/build, Helm, Envoyvalidation
+green. Static +runtime-delta reviews approved, livegate remains red.
+
 ## CNG readiness review (2026-10-06)
 
 Local rebase onto main5876695 complete. Setup corrections reviewed + green:
