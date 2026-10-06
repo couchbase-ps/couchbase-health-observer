@@ -37,7 +37,7 @@ services:
     # 9091 is plain HTTP and carries /live, /ready, /health and /metrics.
     # Published for the Task 12 readiness-latch evidence capture.
     ports:
-      - "${CNG_WEB_HOST_PORT}:9091"
+      - "127.0.0.1:${CNG_WEB_HOST_PORT}:9091"
     # --cb-host takes a SINGLE host, not a bootstrap list, which is what
     # scenario 10 probes. --daemon retries the cluster connection every 5s at
     # startup, which matters because the cluster takes about 90s to provision.
@@ -66,7 +66,7 @@ services:
       cng-lb-net:
         ipv4_address: ${OBS_IP}
     ports:
-      - "${OBS_HOST_PORT}:8080"
+      - "127.0.0.1:${OBS_HOST_PORT}:8080"
     # Observe only. No --actuators and no --secondary-conn: the load balancer
     # owns the switch decision, and two actuation paths could not be attributed.
     command:
@@ -77,6 +77,7 @@ services:
       - "--critical=kv"
       - "--addr=:8080"
       - "--interval=2s"
+      - "--probe-timeout=1s"
       - "--log-level=info"
 
 networks:

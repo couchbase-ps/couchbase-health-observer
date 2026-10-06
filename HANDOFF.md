@@ -2,29 +2,22 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
-## CNG load-balancer stack
+## CNG readiness review (2026-10-06)
 
-Done, Tasks 1 to 13. `test/compose-cng/lb_e2e.sh` runs scenarios 1 to 8 and 10
-plus the CNG readiness capture, and is wired into `e2e.yml` as
-`compose-cng-lb-e2e` (45 min timeout, uploads `/tmp/cng-lb-out`).
+Local rebase onto main5876695 complete. Setup corrections reviewed + green:
+query transport/SQL errors now fail + retry; online primary index + exact marker
+readback required. All CNG host ports bind127.0.0.1. Observer explicit per-ping1s,
+Envoy4s clears both sequential pings. Twelve offline setup regressions pass.
 
-Artifacts each run produces in `/tmp/cng-lb-out`:
-- `s*.csv` per-operation availability with the serving region per line
-- `s7-stranded.txt` writes lost to auto-failback
-- `s10-cng-bootstrap.txt` whether CNG survives losing its `--cb-host` node
-- `cng-readiness-latch.txt` CNG 200 versus Observer 503 with the cluster gone
+Remaining review corrections: trustworthy operation/region evidence, workload
+completion guards, pre-teardown logs, customer runbook, vault reconciliation,
+fresh full suite + final review. Historical Tasks1-13 completion did not prove
+customer readiness. Prior no-success gap != full recovery; prior timings not RTO.
 
-Not done, deliberately:
-- **Scenario 9, DNS flip against a live gRPC channel.** Deprioritized by Tayeb.
-  Matters because Akamai GTM is DNS-only and cannot evict established
-  connections, so it would likely fail scenario 3 entirely.
-- **Phase 2, kind plus Operator-shipped CNG.** Differences to expect: CNG is a
-  sidecar in every Couchbase Server pod, gRPC on 443 not 18098,
-  Operator-generated cert secrets, port 9091 reachable on the pod IP only, and
-  `spec.networking.cloudNativeGateway` flagged developer preview.
-- **Quorum aggregation across multiple Observers.** Envoy cluster health is an
-  OR, so more Observers per region would make detection worse, not better.
-- **Manual failback.** Envoy cannot do it; needs an xDS control plane.
+Deferred: scenario9 DNS, kind/Operator, quorum, XDCR, production failback control.
+Static priority recovery splits old/new connections. Manual failback needs
+external state + connection control; xDS one option. Standalone now documented.
+Node/Python SDK docs conflict, Java3.7.4 only tested. No push/merge authorized.
 
 ## Health follows ACTIVE cluster after switch (2026-08-26, #38)
 
@@ -114,7 +107,7 @@ reachable fraction (X/Y); node status SDK-honest (reachable|unreachable). Golden
 
 Held-switch fix: `state.Machine` no longer latches `switched` on the switch
 DECISION. `Observe` requests the switch every tick past `FailoverDelay` until the
-loop calls new `MarkSwitched()` — done ONLY after `act.Switch` actually succeeds
+loop calls new `MarkSwitched()` :  done ONLY after `act.Switch` actually succeeds
 (or ConfigMap already on secondary). A held switch (secondary not ready) now
 retries each tick until it succeeds instead of stranding the observer on a dead
 primary; health honestly reads "switch required" while held, not "already
@@ -172,13 +165,13 @@ cancels superseded PR e2e runs.
 `compose-e2e` (~3m48s), `kind-switch-lambda` (~1m6s), `kind-region-switch`
 (~8m46s) all PASS. e2e workflow conclusion = success; PR MERGEABLE.
 - `kind-region-switch` (6 Couchbase pods) **fits a standard `ubuntu-latest`
-  runner** — resource question answered, job kept. Run 1 failure was only the
+  runner** :  resource question answered, job kept. Run 1 failure was only the
   missing `couchbase-partners` helm repo; fixed in `test/kind/e2e_switch.sh` +
   `render.sh` (`helm repo add` before `helm dependency build`).
 - `compose-tls-e2e` case 1 (`--tls-cert-path` → DOWN) failed on GH runners:
   `poll_status` returned the FIRST probe (a warm-up DOWN before the observer
   settled over TLS), not the expected status. FIXED on main (89a2dd9,
-  `🐛(compose) #19: wait for expected TLS e2e status, not first probe`) — the
+  `🐛(compose) #19: wait for expected TLS e2e status, not first probe`) :  the
   harness now waits for the expected status. Branch rebased onto that fix and
   `continue-on-error` removed, so `compose-tls-e2e` is a blocking gate again. All
   four e2e jobs now green + blocking.
@@ -278,7 +271,7 @@ Root cause: a leftover host process (a `go run ./cmd/svchealthcheck` bound to `c
 
 Lesson for any agent: if the observer reports DOWN unexpectedly, check `lsof -nP -iTCP:8080 -sTCP:LISTEN` for a stray host process before debugging the SDK.
 
-## Phase 2 (2026-06-22): failover actuation — branch `observer-failover-actuation`
+## Phase 2 (2026-06-22): failover actuation :  branch `observer-failover-actuation`
 
 Build the active path on top of the svchealth detector:
 - [x] state machine (`pkg/state`): sustained-DOWN FailoverDelay, reset on healthy, fires once, no auto-failback
@@ -352,7 +345,7 @@ e2e exercises the auto-failover-absorption path, matching the docker e2e:
   race shows up as `connection refused` AND `context deadline exceeded`); only a real
   `denied the request` validation fails fast.
 - region-a Available/Ready waits bumped 10m -> 20m: 5-node bring-up + rebalance on
-  kind exceeds 10m (the earlier 10m timeout, not a resource limit — all 5 pods schedule).
+  kind exceeds 10m (the earlier 10m timeout, not a resource limit :  all 5 pods schedule).
 - Live e2e PASS: scenario A no-switch confirmed, scenario B switched cb-conn to
   region-b and rolled mock-app.
 
