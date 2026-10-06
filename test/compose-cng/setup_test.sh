@@ -174,7 +174,10 @@ all_init_requests_bounded() {
       *' --connect-timeout 2 --max-time 5 '*) ;;
       *) echo 'init HTTP request lacks timeout bounds' >&2; return 99 ;;
     esac
-    echo '{"hostname":"cb-a-data-2.local:8091","status":"success","results":[1]}'
+    case "$*" in
+      *'/pools/default'*) echo '{"clusterName":"region-a","nodes":[{"hostname":"cb-a-data-1.local:8091","status":"healthy","clusterMembership":"active","services":["kv"]},{"hostname":"cb-a-data-2.local:8091","status":"healthy","clusterMembership":"active","services":["kv"]}]}' ;;
+      *) echo '{"status":"success","results":[1]}' ;;
+    esac
   }
   initialize_primary && node_is_clustered cb-a-data-2 && configure_autofailover && run_query 'SELECT 1'
 }
@@ -226,7 +229,7 @@ local_ports() {
   docker compose -f "$dir/envoy/docker-compose.yml" config --format json >"$WORK/envoy.json" || return 1
   python3 - "$WORK" <<'PY'
 import json, pathlib, sys
-for path in pathlib.Path(sys.argv[1]).glob('*.json'):
+for path in (pathlib.Path(sys.argv[1]) / name for name in ('region-a.json', 'region-b.json', 'envoy.json')):
     for name, service in json.loads(path.read_text())['services'].items():
         for port in service.get('ports', []):
             if port.get('host_ip') != '127.0.0.1':
@@ -235,8 +238,196 @@ print('all rendered host publications use 127.0.0.1')
 PY
 }
 
+# Model real CLI side effects through files: retry_until uses command substitution.
+startup_fixture() {
+  CLI=startup_cli
+  echo 0 >"$WORK/clock"; echo 0 >"$WORK/node-init-count"; echo 0 >"$WORK/cluster-init-count"; echo 0 >"$WORK/server-add-count"; echo 0 >"$WORK/rebalance-count"
+  rm -f "$WORK/cluster.json"
+  date() { cat "$WORK/clock"; }
+  sleep() { local n; n="$(cat "$WORK/clock")"; echo $((n+100)) >"$WORK/clock"; }
+  curl() {
+    case "$*" in
+      *'/pools/default'*) [ -f "$WORK/cluster.json" ] || return 22; cat "$WORK/cluster.json" ;;
+      *) return 0 ;;
+    esac
+  }
+  startup_cli() {
+    local n file="$WORK/$1-count"
+    n="$(cat "$file")"; n=$((n+1)); echo "$n" >"$file"
+    case "$1" in
+      node-init)
+        if [ "${NODE_FAIL:-0}" -eq 1 ] || { [ "${NODE_TRANSIENT:-0}" -eq 1 ] && [ "$n" -eq 1 ]; }; then
+          echo 'ERROR: node init temporary failure' >&2; return 1
+        fi ;;
+      cluster-init)
+        if [ "${CLUSTER_FAIL:-0}" -eq 1 ] || { [ "${CLUSTER_TRANSIENT:-0}" -eq 1 ] && [ "$n" -eq 1 ]; }; then
+          echo 'ERROR: Internal server error, please retry your request.' >&2; return 1
+        fi
+        if [ "${CLUSTER_NO_APPLY:-0}" -eq 1 ]; then return 0; fi
+        primary_state
+        if [ "${CLUSTER_PARTIAL:-0}" -eq 1 ]; then echo 'ERROR: join completion failed after apply' >&2; return 1; fi ;;
+      rebalance) joined_state active ;;
+      server-add)
+        if [ "${JOIN_FAIL:-0}" -eq 1 ] || { [ "${JOIN_TRANSIENT:-0}" -eq 1 ] && [ "$n" -eq 1 ]; }; then
+          echo 'ERROR: Join completion call failed.' >&2; return 1
+        fi
+        if [ "${JOIN_NO_APPLY:-0}" -eq 1 ]; then return 0; fi
+        joined_state inactiveAdded
+        if [ "${JOIN_WRONG_APPLY:-0}" -eq 1 ]; then
+          sed 's/"inactiveAdded"/"inactiveFailed"/g' "$WORK/cluster.json" >"$WORK/wrong.json"
+          mv "$WORK/wrong.json" "$WORK/cluster.json"
+        fi
+        if [ "${JOIN_PARTIAL:-0}" -eq 1 ]; then echo 'ERROR: Join completion call failed.' >&2; return 1; fi ;;
+    esac
+  }
+}
+primary_state() {
+  cat >"$WORK/cluster.json" <<'JSON'
+{"clusterName":"region-a","nodes":[{"hostname":"cb-a-data-1.local:8091","status":"healthy","clusterMembership":"active","services":["kv"]}]}
+JSON
+}
+joined_state() {
+  cat >"$WORK/cluster.json" <<JSON
+{"clusterName":"region-a","nodes":[{"hostname":"cb-a-data-1.local:8091","status":"healthy","clusterMembership":"active","services":["kv"]},{"hostname":"cb-a-data-2.local:8091","status":"healthy","clusterMembership":"$1","services":["kv"]}]}
+JSON
+}
+primary_node_init_failure() {
+  startup_fixture; NODE_FAIL=1
+  if initialize_primary >"$WORK/output" 2>&1; then echo 'failed node-init accepted'; return 1; fi
+  [ "$(cat "$WORK/cluster-init-count")" -eq 0 ] || { echo 'cluster-init ran after failed node-init'; return 1; }
+  grep -q 'node init temporary failure' "$WORK/output"
+}
+primary_transient_retry() {
+  startup_fixture; NODE_TRANSIENT=1 CLUSTER_TRANSIENT=1
+  initialize_primary >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
+  [ "$(cat "$WORK/node-init-count")" -eq 2 ] && [ "$(cat "$WORK/cluster-init-count")" -eq 2 ]
+}
+primary_partial_readback() {
+  startup_fixture; CLUSTER_PARTIAL=1
+  initialize_primary >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
+  [ "$(cat "$WORK/cluster-init-count")" -eq 1 ]
+}
+primary_wrong_configuration() {
+  startup_fixture; primary_state
+  local change
+  for change in clusterName hostname services status clusterMembership; do
+    primary_state
+    python3 - "$WORK/cluster.json" "$change" <<'JSONEDIT'
+import json, sys
+p, key = sys.argv[1:]
+data=json.load(open(p))
+if key == 'clusterName': data[key]='region-b'
+else: data['nodes'][0][key]={'hostname':'other.local:8091','services':['n1ql'],'status':'unhealthy','clusterMembership':'inactiveFailed'}[key]
+json.dump(data,open(p,'w'))
+JSONEDIT
+    if initialize_primary >"$WORK/output" 2>&1; then echo "accepted wrong primary $change"; return 1; fi
+  done
+  [ "$(cat "$WORK/cluster-init-count")" -eq 0 ]
+}
+primary_permanent_failure() {
+  startup_fixture; CLUSTER_FAIL=1
+  if initialize_primary >"$WORK/output" 2>&1; then echo 'permanent cluster init accepted'; return 1; fi
+  grep -q 'within 300s' "$WORK/output" && grep -q 'Internal server error' "$WORK/output"
+}
+join_transient_retry() {
+  startup_fixture; primary_state; JOIN_TRANSIENT=1
+  add_node cb-a-data-2 data >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
+  [ "$ADDED" -eq 1 ] && [ "$(cat "$WORK/server-add-count")" -eq 2 ]
+}
+join_partial_readback() {
+  startup_fixture; primary_state; JOIN_PARTIAL=1
+  add_node cb-a-data-2 data >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
+  [ "$ADDED" -eq 1 ] && [ "$(cat "$WORK/server-add-count")" -eq 1 ]
+}
+join_existing_membership() {
+  startup_fixture; joined_state inactiveAdded
+  add_node cb-a-data-2 data >"$WORK/output" 2>&1 || return 1
+  [ "$ADDED" -eq 1 ] || { echo 'inactiveAdded member skipped rebalance'; return 1; }
+  ADDED=0; joined_state active
+  add_node cb-a-data-2 data >"$WORK/output" 2>&1 || return 1
+  [ "$ADDED" -eq 0 ] && [ "$(cat "$WORK/server-add-count")" -eq 0 ]
+}
+join_permanent_failure() {
+  startup_fixture; primary_state; JOIN_FAIL=1
+  if add_node cb-a-data-2 data >"$WORK/output" 2>&1; then echo 'permanent join accepted'; return 1; fi
+  [ "$ADDED" -eq 0 ] || { echo 'failed join counted'; return 1; }
+  grep -q 'within 300s' "$WORK/output" && grep -q 'Join completion call failed' "$WORK/output"
+}
+join_wrong_state() {
+  startup_fixture
+  local membership
+  for membership in inactiveFailed active; do
+    joined_state "$membership"
+    if [ "$membership" = active ]; then
+      python3 - "$WORK/cluster.json" <<'JSONEDIT'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d['nodes'][1]['services']=['n1ql']; json.dump(d,open(p,'w'))
+JSONEDIT
+    fi
+    if add_node cb-a-data-2 data >"$WORK/output" 2>&1; then echo 'wrong joined member accepted'; return 1; fi
+  done
+  [ "$ADDED" -eq 0 ]
+}
+primary_success_without_readback() {
+  startup_fixture; CLUSTER_NO_APPLY=1
+  if initialize_primary >"$WORK/output" 2>&1; then echo 'CLI success accepted without initialized state'; return 1; fi
+  grep -q 'within 300s' "$WORK/output"
+}
+join_success_without_readback() {
+  startup_fixture; primary_state; JOIN_NO_APPLY=1
+  if add_node cb-a-data-2 data >"$WORK/output" 2>&1; then echo 'CLI success accepted without joined state'; return 1; fi
+  [ "$ADDED" -eq 0 ] && grep -q 'within 300s' "$WORK/output"
+}
+join_partial_wrong_readback() {
+  startup_fixture; primary_state; JOIN_WRONG_APPLY=1 JOIN_PARTIAL=1
+  if add_node cb-a-data-2 data >"$WORK/output" 2>&1; then echo 'partial CLI failure accepted with wrong applied state'; return 1; fi
+  [ "$ADDED" -eq 0 ] && grep -q 'inactiveFailed' "$WORK/output"
+}
+partial_join_rebalanced_before_configured() {
+  sed -n '/^all_nodes_ready$/,$p' "${INIT_SCRIPT:-$REPO/deploy/compose-cng/scripts/init-cluster.sh}" >"$WORK/init-main.sh"
+  startup_fixture; primary_state; JOIN_PARTIAL=1
+  DATA_NODES=(cb-a-data-2); QUERY_NODES=()
+  configure_autofailover() { :; }; create_bucket() { :; }; create_index_and_marker() { :; }
+  source "$WORK/init-main.sh" >"$WORK/output" 2>&1 || { cat "$WORK/output"; return 1; }
+  [ "$ADDED" -eq 1 ] && [ "$(cat "$WORK/rebalance-count")" -eq 1 ] || { echo 'partial join did not trigger one rebalance'; return 1; }
+  grep -q 'region-a configured' "$WORK/output"
+}
+topology_before_configured() {
+  # Run real script bottom half; keep setup effects out, retain topology readback.
+  sed -n '/^all_nodes_ready$/,$p' "${INIT_SCRIPT:-$REPO/deploy/compose-cng/scripts/init-cluster.sh}" >"$WORK/init-main.sh"
+  startup_fixture; DATA_NODES=(cb-a-data-2 cb-a-data-3); QUERY_NODES=(cb-a-iq-1 cb-a-iq-2)
+  cat >"$WORK/cluster.json" <<'JSON'
+{"clusterName":"region-a","nodes":[{"hostname":"cb-a-data-1.local:8091","status":"healthy","clusterMembership":"active","services":["kv"]},{"hostname":"cb-a-data-2.local:8091","status":"healthy","clusterMembership":"active","services":["kv"]},{"hostname":"cb-a-data-3.local:8091","status":"healthy","clusterMembership":"active","services":["kv"]},{"hostname":"cb-a-iq-1.local:8091","status":"healthy","clusterMembership":"active","services":["index","n1ql"]},{"hostname":"cb-a-iq-2.local:8091","status":"healthy","clusterMembership":"active","services":["n1ql","index"]}]}
+JSON
+  all_nodes_ready() { :; }; initialize_primary() { :; }; wait_for_authenticated_cluster() { :; }
+  add_node() { :; }; configure_autofailover() { :; }; create_bucket() { :; }; create_index_and_marker() { :; }
+  source "$WORK/init-main.sh" >"$WORK/output" 2>&1 || return 1
+  grep -q 'region-a configured' "$WORK/output" || return 1
+  DATA_NODES=(cb-a-data-2); QUERY_NODES=()
+  local change
+  for change in missing extra services status clusterMembership clusterName; do
+    joined_state active
+    python3 - "$WORK/cluster.json" "$change" <<'JSONEDIT'
+import json, sys
+p,key=sys.argv[1:]; d=json.load(open(p))
+if key == 'missing': d['nodes'].pop()
+elif key == 'extra': d['nodes'].append(dict(d['nodes'][1],hostname='unexpected.local:8091'))
+elif key == 'clusterName': d[key]='region-b'
+else: d['nodes'][1][key]={'services':['n1ql'],'status':'unhealthy','clusterMembership':'inactiveAdded'}[key]
+json.dump(d,open(p,'w'))
+JSONEDIT
+    if ( source "$WORK/init-main.sh" ) >"$WORK/output" 2>&1; then echo "configured with $change topology"; return 1; fi
+    if grep -q 'region-a configured' "$WORK/output"; then echo 'printed configured before topology gate'; return 1; fi
+  done
+  # Single node region-b derives its expected services from primary env.
+  REGION=b PRIMARY=cb-b-node-1 PRIMARY_SERVICES=data,index,query DATA_NODES=() QUERY_NODES=()
+  echo '{"clusterName":"region-b","nodes":[{"hostname":"cb-b-node-1.local:8091","status":"healthy","clusterMembership":"active","services":["n1ql","kv","index"]}]}' >"$WORK/cluster.json"
+  source "$WORK/init-main.sh" >"$WORK/output" 2>&1 || return 1
+  grep -q 'region-b configured' "$WORK/output"
+}
+
 failed=0
-for test in ${SETUP_TESTS:-transport_failure sql_failure nested_success invalid_response valid_response transient_retry persistent_failure marker_readiness index_readiness setup_verifies_readiness bounded_init_request node_deadline auth_deadline index_deadline readiness_success all_init_requests_bounded network_create_failure network_existing_subnet probe_budget local_ports}; do
+for test in ${SETUP_TESTS:-primary_node_init_failure primary_transient_retry primary_partial_readback primary_wrong_configuration primary_permanent_failure join_transient_retry join_partial_readback join_existing_membership join_permanent_failure join_wrong_state primary_success_without_readback join_success_without_readback join_partial_wrong_readback partial_join_rebalanced_before_configured topology_before_configured transport_failure sql_failure nested_success invalid_response valid_response transient_retry persistent_failure marker_readiness index_readiness setup_verifies_readiness bounded_init_request node_deadline auth_deadline index_deadline readiness_success all_init_requests_bounded network_create_failure network_existing_subnet probe_budget local_ports}; do
   if ( "$test" ); then
     echo "PASS: $test"
   else

@@ -29,6 +29,15 @@ HTTP200 + traffic recovery, no causal-isolation claim. Setup20/evidence25
 regressions green. Customer runbook ready; local feature history sanitized with
 backup refs, reviewed tip tree preserved. Remote untouched.
 
+Runtime startup task reviewed + green:35 setup/30 evidence regressions.
+First clean run failed CLI join/cluster-init; identical retry passed. Init now
+converges bounded300s with exact desired REST state, counts inactiveAdded outside
+retry subshell, requires full healthy active topology5a/1b. Failed-run internal
+logs retained before cleanup; diagnostic failure never replaces original exit.
+Server transient mechanism unknown; no quota/OS changes. Cold SDK baseline then
+failed firstGET2168ms, all laterrequests successful: readiness task pending,
+zero-error assertion retained.
+
 Remaining: fresh full suite on final commit, retained/recomputed evidence,
 final merge assessment. First live attempt stopped during image builds to
 include final fixes; no scenario proof claimed from that attempt. Historical Tasks1-13 completion did not prove
