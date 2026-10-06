@@ -60,20 +60,12 @@ static_resources:
       zone_aware_lb_config:
         fail_traffic_on_panic: true
     health_checks:
-    # 5s x 12 = a 60s sustained-down window. It must exceed the cluster
-    # auto-failover timeout of 30s, or a single absorbed node loss would trip
-    # the switch. Jitter is left at zero so the window stays exact.
-    # timeout is 4s, above the brief's original 2s. The whole point of this
-    # design is that the load balancer reads the Observer's verdict, not the
-    # Observer's latency. The Observer re-probes the cluster on every request
-    # and its own probe bound is 2s, so a 2s Envoy timeout can expire before
-    # the Observer ever gets to answer with its 503, and Envoy then records a
-    # network failure instead of reading the status code at all. That leaves
-    # retriable_statuses unable to do anything, and it also means a merely
-    # slow but still healthy Observer would read as unhealthy and cause a
-    # false failover, which is worse than the flapping the debounce below
-    # exists to prevent. 4s clears the Observer's 2s bound while staying under
-    # the 5s interval, so checks still fire back to back with no overlap.
+    # Twelve consecutive failures at a 5s interval debounce an absorbed node
+    # loss (auto-failover timeout 30s). This is not an exact 60s wall-clock
+    # guarantee: each check's duration and timer phase can add delay.
+    # Observer runs two sequential pings, explicitly bounded at 1s each in
+    # this stack. A 4s health-check timeout leaves margin above that 2s probe
+    # budget so Envoy can read the HTTP verdict rather than time out first.
     - timeout: 4s
       interval: 5s
       unhealthy_threshold: 12
