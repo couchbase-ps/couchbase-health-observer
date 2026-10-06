@@ -2,13 +2,25 @@
 
 This stack tests whether an existing Java SDK client can reconnect through a load balancer when its Couchbase region fails. It is a repeatable proof of concept. It is not a production deployment or a product support commitment.
 
-The tested path is Java SDK 3.7.4 -> Envoy TCP proxy -> CNG 1.2.1 -> Couchbase Server EE 8.0.1. TLS passes through Envoy to CNG. One passive Observer checks each region. Envoy reads the Observer verdict and decides when to move connections.
+The configured path is Java SDK 3.7.4 -> Envoy TCP proxy -> CNG 1.2.1 -> Couchbase Server EE 8.0.3. The completed baseline and gateway panic below were recorded with Server EE 8.0.1. TLS passes through Envoy to CNG. One passive Observer checks each region. Envoy reads the Observer verdict and decides when to move connections.
 
 ## Current validation result (2026-10-06)
 
-**Not ready for customer sign-off or merge validation.** Fresh arm64 run on commit `e451b7f` passed setup and the healthy baseline (979 operations, zero measured errors). Scenario 2 then failed: CNG 1.2.1 crashed with a nil-pointer panic in `gocbcorex.(*kvClient).close` after one data node stopped. Couchbase auto-failover completed and the two remaining data nodes were healthy, but the workload did not recover. It recorded 66 errors and a 139,907 ms no-success gap. No region-b response was observed.
+**Not ready for customer sign-off or merge validation.** Fresh arm64 run on commit `e451b7f`, with Server EE 8.0.1, passed setup and the healthy baseline (979 operations, zero measured errors). Scenario 2 then failed: CNG 1.2.1 crashed with a nil-pointer panic in `gocbcorex.(*kvClient).close` after one data node stopped. Couchbase auto-failover completed and the two remaining data nodes were healthy, but the workload did not recover. It recorded 66 errors and a 139,907 ms no-success gap. No region-b response was observed.
 
 This confirms that gateway failure must be considered separately from database health. The current Observer-only health configuration does not provide that combined signal. The full suite stopped at this failure; later scenarios were not accepted as proven by this run. A vendor-supported gateway fix/version and a validated gateway-health or recovery policy are required before claiming completion. Unit tests and static review do not replace this failed live gate.
+
+## Latest-version follow-up (2026-10-06)
+
+A fresh registry check and pull confirmed that CNG 1.2.1 remains the latest public image. Its digest matches the image that crashed. The configuration now pins this digest and Server EE 8.0.3 by digest. [Server 8.0.3 release notes](https://docs.couchbase.com/server/current/release-notes/relnotes.html) identify the September 2026 maintenance release.
+
+Neither latest-version startup attempt completed setup. The first failed the 300-second management readiness gate; Server logs show internal CouchDB startup timeouts during ALE log-sink registration. The second used byte-identical cached Observer binaries and sequential region startup, with no compilation. Management and authentication checks passed, then node convergence failed with curl exit 28. No fault scenario ran against Server 8.0.3. The host had heavy CPU use and active swapping. These failures do not establish that Server 8.0.3 causes or fixes the gateway panic.
+
+Final evidence capture also found a different CNG panic after the cached startup failed. `cbauthx.(*RevRpcClient).Close` at `revrpcclient.go:166`, called from `NewCbAuthClient` at `cbauthclient.go:152`, crashed after authentication reconnect timeouts. The container exited at 09:34:05 UTC with exit code 2 and `OOMKilled=false`. This is a separate fault from the earlier KV-close panic. Its source path and issue history still need review. These metadata rule out a recorded Docker OOM kill for this gateway exit; they do not rule out host pressure as a trigger for connection timeouts.
+
+A source audit found a possible initialization race: a read-error callback can call `kvClient.close` before its client field is assigned. A synthetic callback-order test reproduced the same panic location without network traffic. The relevant code is unchanged between the [image-recorded dependency revision](https://github.com/couchbase/gocbcorex/blob/c57d038398a3a4fbb6e3b3c4258f6a47fb6e46bd/kvclient.go) and [audited public revision](https://github.com/couchbase/gocbcorex/blob/299dda335412eff141d642a5ab6fb8bcc2ebbdb6/kvclient.go). This is a candidate cause, not proof of the actual callback order in the gateway run. Host pressure can change timing or cause connection errors; it does not establish an OOM cause or remove the software defect.
+
+Continue on a quiet host. Retain Docker exit status, OOM flags, resource samples and both Observer and Envoy health readings. Check the node-convergence transport retry path before the full run. No confirmed panic fix or applicable workaround was established. Customer readiness and merge validation remain blocked.
 
 ## Run the test
 
