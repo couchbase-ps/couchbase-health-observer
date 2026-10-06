@@ -62,6 +62,10 @@ Scenario 9 (DNS steering) is deferred. Kubernetes Operator deployment, multiple 
 
 A passing line is not enough. Read artifacts from the same run: per-operation CSVs, `<scenario>.summary.json`, workload exit codes, `commit.txt`, `run-id`, `fault-events.jsonl`, `s7.overlap.summary.json`, the three text evidence files and scoped logs/image metadata. A `.partial.summary.json` file describes an interrupted workload and cannot establish successful completion. CI uploads the directory as `cng-lb-output` on both success and failure.
 
+Positive clients first wait for gRPC transport, then verify GET, UPSERT and query through the same client. All startup attempts remain in `<scenario>.startup.csv`; `<scenario>.startup.json` records readiness, duration and outcome. SDK `waitUntilReady()` alone checks transport for the pinned CNG SDK; it does not prove the backend bucket is ready. Driver waits for a current-run `<scenario>.ready.json` before starting its fault countdown. Intentionally down and wrong-CA workloads disable positive startup readiness and record that mode explicitly.
+
+`RUN_SECONDS` and the main CSV start after successful startup. A startup error is retained in startup evidence; it does not become an ignored measurement error. Fault and reconnect errors stay in the main CSV. The measured request budgets remain GET/UPSERT 2s and query 5s. A zero-error healthy baseline remains mandatory.
+
 CSV rows contain operation start time (`epoch_ms`), operation, result, latency, exact observed region where available, and error detail. A successful marker GET proves its own region. A query can return its marker in the same request. UPSERT has no exact region label: a preceding GET can be served by another region if the connection moves between requests. Do not infer write placement from the previous read.
 
 Keep three different measures separate:
@@ -72,7 +76,7 @@ Keep three different measures separate:
 
 Each measured result applies to one recorded run, test load, configuration and host. Do not use an earlier sample range as a guaranteed recovery time. Whole-region loss and partial node loss use different detection paths and must be reported separately. The serial harness targets 20 loop iterations per second; each iteration performs a GET and UPSERT, plus periodic queries. It does not produce exactly 20 operations per second. During failures, operation timeouts reduce throughput.
 
-The idle test covers 60 seconds. It does not test the configured one-hour idle expiry. The TLS test checks server certificate trust; it does not test client certificate authentication. The no-replication test proves availability and routing, not data continuity.
+The idle test covers 60 seconds. It does not test the configured one-hour idle expiry. The TLS test checks server certificate trust between SDK and CNG. It does not test client certificate authentication or TLS between CNG/Observer and Couchbase Server. The tested backend links use plaintext; production transport protection needs separate configuration and validation. The no-replication test proves availability and routing, not data continuity.
 
 ## Settings required for this test
 
@@ -102,6 +106,8 @@ Generated certificates use one test CA and one shared server key. Production gat
 **This stack has single instances.** One Observer, one CNG and one Envoy per tested role are not an HA production topology. Multiple health sensors need an explicit aggregation rule; adding independent Observer checks is not a tested quorum design. Test load, network partitions, asymmetric failures, certificate expiry and application retry behavior require separate validation.
 
 **Support depends on the exact deployment and SDK.** Current Couchbase documentation describes [standalone Docker and VM deployment](https://docs.couchbase.com/cloud-native-gateway/current/Deployment/deploying-self-managed.html). The earlier claim that standalone CNG was undocumented is obsolete. This PoC does not establish a support contract. Current [CNG capability documentation](https://docs.couchbase.com/cloud-native-gateway/current/intro/supported-unsupported-capabilities.html) and [Node.js compatibility documentation](https://docs.couchbase.com/nodejs-sdk/current/project-docs/compatibility.html) disagree on Node.js availability. This test proves Java SDK 3.7.4 only. Confirm support for each required SDK and version with Couchbase before committing to a customer design.
+
+CNG 1.2.1 INFO logs in this test include the backend authentication password inside connection configuration. The stack uses dummy credentials. Review gateway logging and credential handling before using real credentials, and do not publish production gateway logs as PoC evidence.
 
 ## Product health observation
 
