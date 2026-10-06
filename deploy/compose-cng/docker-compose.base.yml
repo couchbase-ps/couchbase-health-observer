@@ -6,7 +6,7 @@
 #     -f docker-compose.base.yml -f docker-compose.region-a.yml up -d
 services:
   init:
-    image: couchbase:enterprise-8.0.1
+    image: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
     container_name: cb-${REGION}-init
     networks:
       cng-lb-net:
@@ -26,7 +26,7 @@ services:
     restart: "no"
 
   cng:
-    image: couchbase/cloud-native-gateway:1.2.1
+    image: couchbase/cloud-native-gateway:1.2.1@sha256:a97b198fa7ba7bdfd3cf0251ea2229ce70020d416516dbd361dcd8431b5b16cf
     container_name: cng-${REGION}
     depends_on:
       - init

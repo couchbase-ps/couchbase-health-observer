@@ -220,6 +220,29 @@ if timeout is None or float(timeout[1]) <= budget:
 print(f'Envoy {timeout[1]}s exceeds complete Observer {budget:g}s probe budget')
 PYTHON
 }
+latest_images() {
+  local dir="$REPO/deploy/compose-cng" region
+  for region in a b; do
+    docker compose --env-file "$dir/env/region-$region.env" -f "$dir/docker-compose.base.yml" \
+      -f "$dir/docker-compose.region-$region.yml" config --format json >"$WORK/images-$region.json" || return 1
+  done
+  python3 - "$WORK" <<'PYIMAGES'
+import json, pathlib, sys
+server_image = 'couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d'
+cng_image = 'couchbase/cloud-native-gateway:1.2.1@sha256:a97b198fa7ba7bdfd3cf0251ea2229ce70020d416516dbd361dcd8431b5b16cf'
+for region, nodes in (
+    ('a', ('cb-a-data-1', 'cb-a-data-2', 'cb-a-data-3', 'cb-a-iq-1', 'cb-a-iq-2')),
+    ('b', ('cb-b-node-1',)),
+):
+    services = json.loads((pathlib.Path(sys.argv[1]) / f'images-{region}.json').read_text())['services']
+    for name in (*nodes, 'init', 'cng'):
+        expected = cng_image if name == 'cng' else server_image
+        actual = services[name]['image']
+        if actual != expected:
+            raise SystemExit(f'region-{region}/{name}: expected {expected}, got {actual}')
+print('both regions render verified Server 8.0.3 and CNG 1.2.1 image digests')
+PYIMAGES
+}
 local_ports() {
   local dir="$REPO/deploy/compose-cng" region
   for region in a b; do
@@ -427,7 +450,7 @@ JSONEDIT
 }
 
 failed=0
-for test in ${SETUP_TESTS:-primary_node_init_failure primary_transient_retry primary_partial_readback primary_wrong_configuration primary_permanent_failure join_transient_retry join_partial_readback join_existing_membership join_permanent_failure join_wrong_state primary_success_without_readback join_success_without_readback join_partial_wrong_readback partial_join_rebalanced_before_configured topology_before_configured transport_failure sql_failure nested_success invalid_response valid_response transient_retry persistent_failure marker_readiness index_readiness setup_verifies_readiness bounded_init_request node_deadline auth_deadline index_deadline readiness_success all_init_requests_bounded network_create_failure network_existing_subnet probe_budget local_ports}; do
+for test in ${SETUP_TESTS:-primary_node_init_failure primary_transient_retry primary_partial_readback primary_wrong_configuration primary_permanent_failure join_transient_retry join_partial_readback join_existing_membership join_permanent_failure join_wrong_state primary_success_without_readback join_success_without_readback join_partial_wrong_readback partial_join_rebalanced_before_configured topology_before_configured transport_failure sql_failure nested_success invalid_response valid_response transient_retry persistent_failure marker_readiness index_readiness setup_verifies_readiness bounded_init_request node_deadline auth_deadline index_deadline readiness_success all_init_requests_bounded network_create_failure network_existing_subnet probe_budget latest_images local_ports}; do
   if ( "$test" ); then
     echo "PASS: $test"
   else

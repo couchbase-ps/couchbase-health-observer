@@ -2,6 +2,13 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## CNG latest-image follow-up (2026-10-06)
+
+Registry checked +fresh pulls: CNG1.2.1 unchanged digest a97b198f; Server8.0.3
+latest stable. Both regions +init CLI pinned Server db0e1cdc and CNG a97b198f.
+Image regression red(old8.0.1) then green; setup36/evidence37 +syntax green.
+Scoped independent review approved. Latest live run in progress; prior NOGO holds.
+
 ## CNG live gate BLOCKED (2026-10-06)
 
 Fresh e451b7f proof: setup +s1passed (979ops,0errors). s2failed: CNG1.2.1

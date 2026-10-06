@@ -11,7 +11,7 @@
 # CB_QUERY_NODES in env/region-a.env stay the short form, unchanged.
 services:
   cb-a-data-1:
-    image: couchbase:enterprise-8.0.1
+    image: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
     container_name: cb-a-data-1
     hostname: cb-a-data-1.local
     networks:
@@ -22,7 +22,7 @@ services:
     volumes: ["cb-a-data-1:/opt/couchbase/var"]
 
   cb-a-data-2:
-    image: couchbase:enterprise-8.0.1
+    image: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
     container_name: cb-a-data-2
     hostname: cb-a-data-2.local
     networks:
@@ -32,7 +32,7 @@ services:
     volumes: ["cb-a-data-2:/opt/couchbase/var"]
 
   cb-a-data-3:
-    image: couchbase:enterprise-8.0.1
+    image: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
     container_name: cb-a-data-3
     hostname: cb-a-data-3.local
     networks:
@@ -42,7 +42,7 @@ services:
     volumes: ["cb-a-data-3:/opt/couchbase/var"]
 
   cb-a-iq-1:
-    image: couchbase:enterprise-8.0.1
+    image: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
     container_name: cb-a-iq-1
     hostname: cb-a-iq-1.local
     networks:
@@ -52,7 +52,7 @@ services:
     volumes: ["cb-a-iq-1:/opt/couchbase/var"]
 
   cb-a-iq-2:
-    image: couchbase:enterprise-8.0.1
+    image: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
     container_name: cb-a-iq-2
     hostname: cb-a-iq-2.local
     networks:

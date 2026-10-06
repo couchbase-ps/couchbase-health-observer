@@ -8,7 +8,7 @@
 # --node-init-hostname). See docker-compose.region-a.yml for the fuller note.
 services:
   cb-b-node-1:
-    image: couchbase:enterprise-8.0.1
+    image: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
     container_name: cb-b-node-1
     hostname: cb-b-node-1.local
     networks:
