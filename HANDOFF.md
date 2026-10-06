@@ -2,6 +2,13 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## CNG OOM/exit diagnostic capture (2026-10-06)
+
+Compact inspect retains image/image_id/running; adds status,exit_code,oom_killed,
+error,started_at,finished_at,memory_limit_bytes. Scoped testcontainers only.
+Quoted strings JSON-safe. Red missingexitstate then green; evidence37 +syntax
++diffchecks green. Independent scoped review approved. No runtime behavior change.
+
 ## CNG latest-image follow-up (2026-10-06)
 
 Registry checked +fresh pulls: CNG1.2.1 unchanged digest a97b198f; Server8.0.3
