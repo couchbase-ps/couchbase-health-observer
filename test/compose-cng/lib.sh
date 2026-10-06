@@ -123,16 +123,29 @@ assert_marker() {
   esac
 }
 
-wait_init() { # compose invocation string; setup job must exit successfully
-  local compose="$1" container status
+wait_init() { # compose invocation string; setup job must exit within 600s
+  local compose="$1" container state status info deadline
   container="$($compose ps -aq init)" || return $?
   [ -n "$container" ] || { echo "FAIL: no init container" >&2; FAIL=1; return 1; }
-  status="$(docker wait "$container")" || return $?
-  if [ "$status" != 0 ]; then
-    echo "FAIL: cluster init exit=$status" >&2
-    FAIL=1
-    return 1
-  fi
+  deadline=$(( $(date +%s) + 600 ))
+  while true; do
+    info="$(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$container")" || return $?
+    read -r state status <<<"$info"
+    case "$state" in
+      exited)
+        [ "$status" = 0 ] && return 0
+        echo "FAIL: cluster init exit=$status" >&2
+        FAIL=1; return 1
+        ;;
+      created|running|restarting) ;;
+      *) echo "FAIL: cluster init $container unexpected state=$state exit=$status" >&2; FAIL=1; return 1 ;;
+    esac
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "FAIL: cluster init $container did not exit within 600s (state=$state); inspect init logs" >&2
+      FAIL=1; return 1
+    fi
+    sleep 3
+  done
 }
 
 assert_stopped_membership() { # stopped node plus cluster's reported membership

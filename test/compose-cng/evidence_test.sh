@@ -176,8 +176,37 @@ node_membership_proof() {
 init_failure() {
   declare -F wait_init >/dev/null || { echo 'init exit status not verified'; return 1; }
   COMPOSE_A=docker
-  docker() { if [ "$1" = ps ]; then echo test-init; elif [ "$1" = wait ]; then echo 23; fi; }
+  docker() { if [ "$1" = ps ]; then echo test-init; elif [ "$1" = inspect ]; then echo "exited 23"; fi; }
   expect_failure wait_init "$COMPOSE_A"
+}
+init_deadline() {
+  echo 1000 >"$WORK/clock"
+  date() { cat "$WORK/clock"; }
+  sleep() { local now; now="$(cat "$WORK/clock")"; echo $((now+200)) >"$WORK/clock"; }
+  docker() {
+    case "$1" in
+      ps) echo test-init ;;
+      inspect) echo 'running 0' ;;
+      wait) echo 0 ;;
+    esac
+  }
+  expect_failure wait_init docker || return 1
+  grep -q 'test-init.*600s' "$WORK/output" || return 1
+  [ "$(cat "$WORK/clock")" -eq 1600 ]
+}
+init_success() {
+  echo 0 >"$WORK/init-polls"
+  docker() {
+    case "$1" in
+      ps) echo test-init ;;
+      inspect)
+        local n; n="$(cat "$WORK/init-polls")"; echo $((n+1)) >"$WORK/init-polls"
+        if [ "$n" -eq 0 ]; then echo 'running 0'; else echo 'exited 0'; fi
+        ;;
+    esac
+  }
+  wait_init docker || return 1
+  [ "$FAIL" -eq 0 ] && [ "$(cat "$WORK/init-polls")" -eq 2 ]
 }
 summary_offsets() {
   header offsets
@@ -320,7 +349,7 @@ PYPARTIAL
   [ "$status" -ne 0 ] && [ ! -f "$WORK/owned-active" ] && [ ! -f "$WORK/teardown" ]
 }
 failed=0
-for test in ${EVIDENCE_TESTS:-empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
+for test in ${EVIDENCE_TESTS:-empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure init_deadline init_success summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
   if ( FAIL=0; "$test" ); then echo "PASS: $test"; else echo "FAIL: $test"; failed=$((failed+1)); fi
 done
 [ "$failed" -eq 0 ]

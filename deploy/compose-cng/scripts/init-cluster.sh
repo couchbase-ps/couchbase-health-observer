@@ -48,7 +48,8 @@ ADDED=0
 
 wait_for_node() {
   echo "Waiting for $1..."
-  until curl -sS -o /dev/null "http://$1:8091" >/dev/null 2>&1; do sleep 3; done
+  retry_until "node $1 management API" 300 \
+    curl --connect-timeout 2 --max-time 5 -sS -o /dev/null "http://$1:8091"
 }
 
 all_nodes_ready() {
@@ -66,7 +67,7 @@ all_nodes_ready() {
 }
 
 initialize_primary() {
-  if curl -fsS -u "${USERNAME}:${PASSWORD}" "${URL}/pools/default" >/dev/null 2>&1; then
+  if curl --connect-timeout 2 --max-time 5 -fsS -u "${USERNAME}:${PASSWORD}" "${URL}/pools/default" >/dev/null 2>&1; then
     echo "Primary already initialized."
     return
   fi
@@ -91,15 +92,14 @@ initialize_primary() {
 
 wait_for_authenticated_cluster() {
   echo "Waiting for authenticated cluster API..."
-  until curl -kfsS -u "${USERNAME}:${PASSWORD}" "${SECURE_URL}/pools/default" >/dev/null 2>&1; do
-    sleep 3
-  done
+  retry_until "authenticated cluster API at ${SECURE_URL}" 300 \
+    curl --connect-timeout 2 --max-time 5 -kfsS -u "${USERNAME}:${PASSWORD}" "${SECURE_URL}/pools/default"
 }
 
 node_is_clustered() {
   # Nodes are registered under their ".local" FQDN (see add_node), so that is
   # what pools/default reports back.
-  curl -kfsS -u "${USERNAME}:${PASSWORD}" "${SECURE_URL}/pools/default" \
+  curl --connect-timeout 2 --max-time 5 -kfsS -u "${USERNAME}:${PASSWORD}" "${SECURE_URL}/pools/default" \
     | grep -q "\"hostname\":\"$1.local:8091\""
 }
 
@@ -139,7 +139,7 @@ configure_autofailover() {
   # second). Swallowing a failure here would leave the cluster on defaults and
   # make those scenarios measure something else, silently. set -euo pipefail
   # at the top of this script is what we want to fire if the POST fails.
-  curl -kfsS -u "${USERNAME}:${PASSWORD}" -X POST \
+  curl --connect-timeout 2 --max-time 5 -kfsS -u "${USERNAME}:${PASSWORD}" -X POST \
     "${SECURE_URL}/settings/autoFailover" \
     -d enabled=true -d timeout=30 -d maxCount=100 >/dev/null
 }
@@ -181,7 +181,7 @@ if len(sys.argv) > 1:
 
 run_query() {
   local out code
-  if out="$(curl -fsS -u "${USERNAME}:${PASSWORD}" "${QUERY_URL}" \
+  if out="$(curl --connect-timeout 2 --max-time 5 -fsS -u "${USERNAME}:${PASSWORD}" "${QUERY_URL}" \
       --data-urlencode "statement=$1")"; then
     printf '%s\n' "$out"
     if [ "${2:-}" = "ready" ]; then
@@ -222,24 +222,16 @@ retry_until() {
 # wait_for_index_service: the query service can answer "SELECT 1" before the
 # index service on the same node is ready to serve DDL, which is exactly the
 # race that made "CREATE PRIMARY INDEX" return HTTP 500 on a freshly joined,
-# single-node region. This is a best-effort wait on the indexer's own admin
-# port (9102) on QUERY_HOST, which co-hosts the index service in every region
-# layout here (region-a's CB_QUERY_NODES run "index,query" together, and
-# region-b's single PRIMARY runs "data,index,query" together). It never blocks
-# forever: past its own deadline it logs a warning and falls through, because
-# the real safety net is the retry loop around CREATE PRIMARY INDEX below.
+# single-node region. QUERY_HOST co-hosts query and index in both layouts.
+# This stats preflight is advisory: the SQL online-index readback below is
+# the mandatory readiness gate, even if the stats API does not answer.
 wait_for_index_service() {
   echo "Waiting for index service on ${QUERY_HOST}..."
-  local start deadline
-  start="$(date +%s)"; deadline=$((start + 120))
-  until curl -fsS -o /dev/null -u "${USERNAME}:${PASSWORD}" \
-      "http://${QUERY_HOST}:9102/api/v1/stats" 2>/dev/null; do
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "WARNING: index service on ${QUERY_HOST} did not answer within 120s, proceeding anyway" >&2
-      return 0
-    fi
-    sleep 3
-  done
+  if ! retry_until "index service on ${QUERY_HOST}" 120 \
+      curl --connect-timeout 2 --max-time 5 -fsS -o /dev/null -u "${USERNAME}:${PASSWORD}" \
+        "http://${QUERY_HOST}:9102/api/v1/stats"; then
+    echo "WARNING: index service on ${QUERY_HOST} did not answer within 120s, proceeding anyway" >&2
+  fi
 }
 
 verify_primary_index_ready() {

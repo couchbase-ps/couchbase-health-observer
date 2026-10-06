@@ -14,11 +14,16 @@ SUBNET="172.28.0.0/16"
 
 case "${1:-up}" in
   up)
-    if docker network inspect "$NET" >/dev/null 2>&1; then
-      echo "network $NET already exists"
+    if config="$(docker network inspect --format '{{.Driver}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' "$NET" 2>/dev/null)"; then
+      read -r driver subnet extra <<<"$config"
+      if [ "$driver" != bridge ] || [ "$subnet" != "$SUBNET" ] || [ -n "$extra" ]; then
+        echo "ERROR: existing network $NET must be bridge with subnet $SUBNET (got: $config)" >&2
+        exit 1
+      fi
+      echo "network $NET already exists ($SUBNET)"
       exit 0
     fi
-    docker network create --driver bridge --subnet "$SUBNET" "$NET"
+    docker network create --driver bridge --subnet "$SUBNET" "$NET" || exit $?
     echo "created $NET ($SUBNET)"
     ;;
   down)

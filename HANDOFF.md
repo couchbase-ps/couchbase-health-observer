@@ -21,8 +21,17 @@ observation. Init status + stopped-node membership verified. Labelled workloads
 retain partial evidence and stop before teardown on early failure. CI runs
 setup/evidence/Java unit gates.
 
-Remaining: customer runbook final review, history sanitization, fresh full suite
-+ final review. Historical Tasks1-13 completion did not prove
+Final branch review + scoped re-review approved. Extra setup fixes green:
+all init HTTP requests connect2s/total5s, node/auth300s, init completion600s;
+stats preflight advisory120s, SQL index gate180s unchanged. Real network helper
+propagates errors + verifies subnet. Scenario10 prose limited to one sampled
+HTTP200 + traffic recovery, no causal-isolation claim. Setup20/evidence25
+regressions green. Customer runbook ready; local feature history sanitized with
+backup refs, reviewed tip tree preserved. Remote untouched.
+
+Remaining: fresh full suite on final commit, retained/recomputed evidence,
+final merge assessment. First live attempt stopped during image builds to
+include final fixes; no scenario proof claimed from that attempt. Historical Tasks1-13 completion did not prove
 customer readiness. Prior no-success gap != full recovery; prior timings not RTO.
 
 Deferred: scenario9 DNS, kind/Operator, quorum, XDCR, production failback control.
