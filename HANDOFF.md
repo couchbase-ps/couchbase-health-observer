@@ -35,8 +35,10 @@ converges bounded300s with exact desired REST state, counts inactiveAdded outsid
 retry subshell, requires full healthy active topology5a/1b. Failed-run internal
 logs retained before cleanup; diagnostic failure never replaces original exit.
 Server transient mechanism unknown; no quota/OS changes. Cold SDK baseline then
-failed firstGET2168ms, all laterrequests successful: readiness task pending,
-zero-error assertion retained.
+failed firstGET2168ms, all laterrequests successful: readiness task reviewed +green:Java10/evidence36/setup35. Late-ready91s
+regression caught +fixed;90s cutoff checkedbeforeacceptance. Transport30s +same-client data30s, every startup request separately
+recorded, currentrun ready handshake90s beforefault; measured2/5s +zeroerror
+unchanged. Negative workloads explicitskip. No post-fault warmup.
 
 Remaining: fresh full suite on final commit, retained/recomputed evidence,
 final merge assessment. First live attempt stopped during image builds to

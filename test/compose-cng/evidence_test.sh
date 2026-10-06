@@ -398,8 +398,140 @@ SH
   grep -q '^cp cb-a-data-2:/opt/couchbase/var/lib/couchbase/logs/error.log ' "$WORK/diagnostic-calls" || { echo 'diagnostic failure stopped remaining node capture'; return 1; }
 }
 
+harness_readiness() {
+  echo current >"$OUT_DIR/run-id"
+  echo 1000 >"$WORK/ready-clock"
+  date() { cat "$WORK/ready-clock"; }
+  sleep() { local n; n="$(cat "$WORK/ready-clock")"; echo $((n+1)) >"$WORK/ready-clock"; }
+  echo stale >"$OUT_DIR/gated.startup.csv"
+  echo '{"run_id":"old","warmup_required":true,"ready":true,"observed_region":"a","measurement_start_epoch_ms":1}' >"$OUT_DIR/gated.ready.json"
+  docker() {
+    case "$1" in
+      run)
+        [ ! -e "$OUT_DIR/gated.ready.json" ] && [ ! -e "$OUT_DIR/gated.startup.csv" ] || echo stale >"$WORK/stale-present"
+        printf '%s\n' "$*" >"$WORK/run-args"
+        echo 0 >"$WORK/ready-polls"
+        ;;
+      inspect)
+        local n; n="$(cat "$WORK/ready-polls")"; echo $((n+1)) >"$WORK/ready-polls"
+        if [ "$n" = 0 ]; then
+          echo '{"run_id":"foreign","warmup_required":true,"ready":true,"observed_region":"a","measurement_start_epoch_ms":1000000}' >"$OUT_DIR/gated.ready.json"
+        else
+          echo '{"run_id":"current","warmup_required":true,"ready":true,"observed_region":"a","measurement_start_epoch_ms":1001000}' >"$OUT_DIR/gated.ready.json"
+        fi
+        echo 'running 0'
+        ;;
+    esac
+  }
+  run_harness gated 20 || return 1
+  [ ! -f "$WORK/stale-present" ] || return 1
+  [ "$(cat "$WORK/ready-polls")" -ge 2 ] || { echo 'foreign readiness accepted'; return 1; }
+  grep -q -- '-e RUN_ID=current' "$WORK/run-args" || return 1
+  grep -q -- '-e READY_FILE=/out/gated.ready.json' "$WORK/run-args" || return 1
+  grep -q -- '-e STARTUP_CSV=/out/gated.startup.csv' "$WORK/run-args" || return 1
+}
+startup_failure_prevents_fault() {
+  echo current >"$OUT_DIR/run-id"
+  docker() { if [ "$1" = inspect ]; then echo 'exited 17'; fi; }
+  record_fault() { echo injected >"$WORK/fault-injected"; }
+  expect_failure scenario_2 || return 1
+  [ ! -e "$WORK/fault-injected" ] || return 1
+  grep -q 'exit=17' "$WORK/output"
+}
+wrong_region_readiness() {
+  echo current >"$OUT_DIR/run-id"
+  echo 1000 >"$WORK/ready-clock"
+  date() { cat "$WORK/ready-clock"; }
+  sleep() { local n; n="$(cat "$WORK/ready-clock")"; echo $((n+30)) >"$WORK/ready-clock"; }
+  docker() {
+    if [ "$1" = inspect ]; then
+      echo '{"run_id":"current","warmup_required":true,"ready":true,"observed_region":"b","measurement_start_epoch_ms":1000000}' >"$OUT_DIR/wrong.ready.json"
+      echo 'running 0'
+    fi
+  }
+  expect_failure run_harness wrong 20
+}
+negative_driver_policy() {
+  echo current >"$OUT_DIR/run-id"
+  docker() {
+    case "$1" in
+      run) printf '%s\n' "$*" >"$WORK/negative-args" ;;
+      inspect)
+        echo '{"run_id":"current","warmup_required":false,"ready":false,"observed_region":"","measurement_start_epoch_ms":1}' >"$OUT_DIR/negative.ready.json"
+        echo 'running 0'
+        ;;
+    esac
+  }
+  run_harness negative 15 -e STARTUP_REQUIRED=false || return 1
+  grep -q -- '-e STARTUP_REQUIRED=false' "$WORK/negative-args"
+}
+s5_disables_positive_warmup() {
+  run_harness() { printf '%s\n' "$*" >"$WORK/s5-args"; }
+  wait_harness() { :; }; assert_negative() { :; }; wait_envoy_unhealthy() { echo failed_active_hc; }
+  scenario_5 || return 1
+  grep -q 'STARTUP_REQUIRED=false' "$WORK/s5-args"
+}
+s8_disables_positive_warmup() {
+  recover_region_a() { :; }; wait_envoy_healthy() { echo healthy; }; wait_observer() { echo UP; }
+  openssl() { :; }; chmod() { :; }
+  echo 0 >"$WORK/verify-count"
+  tls_verify_code() { local n; n="$(cat "$WORK/verify-count")"; echo $((n+1)) >"$WORK/verify-count"; if [ "$n" = 0 ]; then echo 19; else echo 0; fi; }
+  docker() { if [ "$1" = run ]; then printf '%s\n' "$*" >"$WORK/s8-args"; fi; }
+  run_harness() { :; }; wait_harness() { :; }; assert_negative() { :; }; write_summary() { :; }
+  csv_summary() { echo 'ok=0 err=5'; }; assert_recovery() { :; }; csv_regions() { echo 'a b'; }; csv_error_window_ms() { echo 0; }
+  scenario_8 || return 1
+  grep -q 'STARTUP_REQUIRED=false' "$WORK/s8-args"
+  grep -q 'STARTUP_CSV=/out/s8-neg.startup.csv' "$WORK/s8-args"
+}
+
+dead_ready_client() {
+  echo current >"$OUT_DIR/run-id"
+  docker() {
+    if [ "$1" = inspect ]; then
+      echo '{"run_id":"current","warmup_required":true,"ready":true,"observed_region":"a","measurement_start_epoch_ms":1}' >"$OUT_DIR/dead.ready.json"
+      echo 'exited 7'
+    fi
+  }
+  expect_failure run_harness dead 20 || return 1
+  [ "$(cat "$OUT_DIR/dead.exit-code")" = 7 ]
+}
+invalid_ready_body() {
+  echo current >"$OUT_DIR/run-id"
+  echo 1000 >"$WORK/ready-clock"
+  date() { cat "$WORK/ready-clock"; }
+  sleep() { local n; n="$(cat "$WORK/ready-clock")"; echo $((n+30)) >"$WORK/ready-clock"; }
+  docker() {
+    if [ "$1" = inspect ]; then
+      echo '{"run_id":"current","warmup_required":true,"ready":true,"observed_region":"a","measurement_start_epoch_ms":true}' >"$OUT_DIR/body.ready.json"
+      echo 'running 0'
+    fi
+  }
+  expect_failure run_harness body 20
+}
+
+late_ready_prevents_fault() {
+  echo current >"$OUT_DIR/run-id"
+  echo 1000 >"$WORK/ready-clock"
+  date() { cat "$WORK/ready-clock"; }
+  sleep() { local n; n="$(cat "$WORK/ready-clock")"; echo $((n+91)) >"$WORK/ready-clock"; }
+  docker() {
+    if [ "$1" = inspect ]; then
+      if [ "$(cat "$WORK/ready-clock")" -gt 1000 ]; then
+        echo '{"run_id":"current","warmup_required":true,"ready":true,"observed_region":"a","measurement_start_epoch_ms":1091000}' >"$OUT_DIR/s2.ready.json"
+      fi
+      echo 'running 0'
+    fi
+  }
+  record_fault() { echo injected >"$WORK/late-fault"; }
+  wait_harness() { :; }; assert_recovery() { :; }; assert_stopped_membership() { :; }
+  csv_regions() { echo a; }; envoy_health() { echo healthy; }; csv_error_window_ms() { echo 0; }; recover_region_a() { :; }
+  expect_failure scenario_2 || return 1
+  [ ! -e "$WORK/late-fault" ] || { echo 'late readiness allowed fault injection'; return 1; }
+  grep -q 'readiness did not validate within 90s' "$WORK/output"
+}
+
 failed=0
-for test in ${EVIDENCE_TESTS:-failure_internal_logs failure_internal_log_directory empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure init_deadline init_success summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
+for test in ${EVIDENCE_TESTS:-late_ready_prevents_fault dead_ready_client invalid_ready_body harness_readiness startup_failure_prevents_fault wrong_region_readiness negative_driver_policy s5_disables_positive_warmup s8_disables_positive_warmup failure_internal_logs failure_internal_log_directory empty_s5 crashed_harness missing_s2 permanent_write_outage terminal_recovery short_recovery exact_regions completion_gap unsafe_output failed_prerequisite missing_tls_verify s5_real_failures s5_query_over_budget s5_endpoint_unverified s7_overlap node_membership_proof init_failure init_deadline init_success summary_offsets overlap_observation sparse_terminal_success s2_pass_marker readiness_503 early_s7_failure}; do
   if ( FAIL=0; "$test" ); then echo "PASS: $test"; else echo "FAIL: $test"; failed=$((failed+1)); fi
 done
 [ "$failed" -eq 0 ]

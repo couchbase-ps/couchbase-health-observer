@@ -147,7 +147,7 @@ scenario_5() {
   docker stop cb-b-node-1 cng-b cb-b-observer >/dev/null
   assert_eq "s5 region-a endpoint unhealthy" "$(wait_envoy_unhealthy 172.28.1.10 120)" "failed_active_hc" || return $?
   assert_eq "s5 region-b endpoint unhealthy" "$(wait_envoy_unhealthy 172.28.2.10 120)" "failed_active_hc" || return $?
-  run_harness s5 30 || return $?
+  run_harness s5 30 -e STARTUP_REQUIRED=false || return $?
   wait_harness s5 || return $?
   assert_negative s5 || return $?
   echo "PASS: s5 actual get/upsert errors, zero successes; KV <=2500ms, query <=5500ms"
@@ -239,7 +239,7 @@ scenario_7() {
   # it connects there. The question this scenario answers is what happens to
   # THIS connection once region-a comes back, not whether a brand new
   # connection would pick region-a (it does; see the second client below).
-  run_harness s7-longlived 240 || return $?
+  run_harness s7-longlived 240 -e EXPECTED_REGION=b || return $?
   sleep 10
   echo "-- restoring region-a and waiting for Envoy to mark it healthy again --"
   docker start cb-a-data-2 cb-a-data-3 >/dev/null
@@ -605,7 +605,8 @@ scenario_8() {
     -v "$OUT_DIR:/out" -v "$bad:/bad:ro" \
     -e CB_CONN='couchbase2://cng-lb' -e TLS_CA=/bad/other.crt \
     -e CB_BUCKET=lbtest -e RUN_SECONDS=15 -e OPS_PER_SEC=5 \
-    -e OUT_CSV=/out/s8-neg.csv \
+    -e OUT_CSV=/out/s8-neg.csv -e STARTUP_REQUIRED=false \
+    -e RUN_ID="$(cat "$OUT_DIR/run-id")" -e STARTUP_CSV=/out/s8-neg.startup.csv \
     "$HARNESS_IMAGE" >"$OUT_DIR/s8-neg.harness.log" 2>&1 || return $?
   assert_negative s8-neg || return $?
   write_summary s8-neg || return $?
@@ -822,5 +823,5 @@ case "${1:-test}" in
     if [ "$FAIL" -eq 0 ]; then echo "== ALL SCENARIOS PASSED =="; else echo "== SCENARIOS FAILED =="; fi
     exit "$FAIL"
     ;;
-  *) echo "usage: lb_e2e.sh [up|down|test|scenario N]" >&2; exit 2 ;;
+  *) echo "usage: lb_e2e.sh [up|down|test|scenario N|readiness]" >&2; exit 2 ;;
 esac

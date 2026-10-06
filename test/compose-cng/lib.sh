@@ -184,13 +184,19 @@ stack_up() {
   assert_eq "envoy region-b baseline" "$(wait_envoy_healthy 172.28.2.10)" "healthy"
 }
 
-# run_harness <csv name> <seconds> [extra -e KEY=VALUE pairs...]
-# Runs detached and returns immediately, so the caller can inject a failure
-# while traffic is flowing. Container name is cng-harness-<csv name>.
+# run_harness <csv name> <measured seconds> [extra -e KEY=VALUE pairs...]
+# Returns only after current client starts measurement. Fault countdown follows.
 run_harness() {
-  local name="$1" secs="$2"; shift 2
+  local name="$1" secs="$2" required=true expected=a arg; shift 2
+  for arg in "$@"; do
+    case "$arg" in
+      STARTUP_REQUIRED=*) required="${arg#*=}" ;;
+      EXPECTED_REGION=*) expected="${arg#*=}" ;;
+    esac
+  done
   ensure_run || return $?
-  rm -f "$OUT_DIR/$name.csv" "$OUT_DIR/$name.exit-code"
+  rm -f "$OUT_DIR/$name.csv" "$OUT_DIR/$name.exit-code" \
+    "$OUT_DIR/$name.ready.json" "$OUT_DIR/$name.startup.csv" "$OUT_DIR/$name.startup.json" || return $?
   docker run -d --name "cng-harness-$name" --label "cng.lb.run=$(cat "$OUT_DIR/run-id")" --network cng-lb-net \
     -v "$OUT_DIR:/out" \
     -v "$CNG_DIR/certs:/certs:ro" \
@@ -200,9 +206,57 @@ run_harness() {
     -e OPS_PER_SEC=20 \
     -e QUERY_PER_SEC=1 \
     -e RUN_SECONDS="$secs" \
+    -e RUN_ID="$(cat "$OUT_DIR/run-id")" \
+    -e READY_FILE="/out/$name.ready.json" \
+    -e STARTUP_CSV="/out/$name.startup.csv" \
+    -e STARTUP_REQUIRED=true -e EXPECTED_REGION=a \
     -e OUT_CSV="/out/$name.csv" \
     "$@" \
-    "$HARNESS_IMAGE" >/dev/null
+    "$HARNESS_IMAGE" >/dev/null || { FAIL=1; return 1; }
+  wait_harness_startup "$name" "$required" "$expected"
+}
+
+wait_harness_startup() { # bounded transport + data startup, then live measurement
+  local name="$1" required="$2" expected="$3" deadline info state status ready_status
+  deadline=$(( $(date +%s) + 90 ))
+  while true; do
+    info="$(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "cng-harness-$name")" || { FAIL=1; return 1; }
+    read -r state status <<<"$info"
+    if [ "$state" != running ]; then
+      printf '%s\n' "$status" >"$OUT_DIR/$name.exit-code"
+      docker logs "cng-harness-$name" >"$OUT_DIR/$name.harness.log" 2>&1 || true
+      echo "FAIL: harness $name startup state=$state exit=$status" >&2
+      FAIL=1; return 1
+    fi
+    if python3 - "$OUT_DIR/$name.ready.json" "$(cat "$OUT_DIR/run-id")" "$required" "$expected" <<'PYREADY'
+import json, sys
+try:
+    with open(sys.argv[1]) as stream: ready = json.load(stream)
+    required = sys.argv[3] == 'true'
+    timestamp = ready.get('measurement_start_epoch_ms')
+    valid = (ready.get('run_id') == sys.argv[2]
+        and ready.get('warmup_required') is required
+        and ready.get('ready') is required
+        and type(timestamp) is int and timestamp > 0
+        and (ready.get('observed_region') == sys.argv[4] if required else ready.get('observed_region') == ''))
+except (OSError, ValueError, AttributeError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PYREADY
+    then ready_status=0
+    else ready_status=1
+    fi
+    # Polling and validation can consume the remaining budget, even for a valid body.
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "FAIL: harness $name readiness did not validate within 90s" >&2
+      FAIL=1; return 1
+    fi
+    if [ "$ready_status" -eq 0 ]; then
+      echo "PASS: harness $name measurement started (warmup_required=$required expected_region=$expected)"
+      return 0
+    fi
+    sleep 1
+  done
 }
 
 wait_harness() { # <csv name>, preserve actual container exit before removing it
