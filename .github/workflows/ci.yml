@@ -35,6 +35,14 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: CNG offline setup and evidence regressions
+        run: |
+          test/compose-cng/setup_test.sh
+          test/compose-cng/evidence_test.sh
+
+      - name: CNG Java harness unit tests
+        run: docker build --target build -t cng-lb-harness-unit:ci harness
+
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false

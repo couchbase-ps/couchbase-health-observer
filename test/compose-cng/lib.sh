@@ -21,18 +21,20 @@ assert_eq() { # <label> <got> <want>
   else
     echo "FAIL: $1 (got=$2 want=$3)"
     FAIL=1
+    return 1
   fi
 }
 
 assert_le() { # <label> <got> <max>
   if [ "$2" -lt 0 ] 2>/dev/null; then
-    echo "FAIL: $1 (got=$2, negative means it never recovered)"
+    echo "FAIL: $1 (got=$2, negative measurement is undefined)"
     FAIL=1
   elif [ "$2" -le "$3" ] 2>/dev/null; then
     echo "PASS: $1 ($2 <= $3)"
   else
     echo "FAIL: $1 (got=$2 want<=$3)"
     FAIL=1
+    return 1
   fi
 }
 
@@ -46,16 +48,17 @@ stack_down() {
 wait_observer() { # <hostport> <want> -> prints the status reached, or the last seen
   local port="$1" want="$2" last="NONE"
   for _ in $(seq 1 60); do
-    last="$(curl -s "http://localhost:$port/health/couchbase" | jq -r '.status // empty' 2>/dev/null)"
+    last="$(curl --connect-timeout 2 --max-time 5 -s "http://localhost:$port/health/couchbase" | jq -r '.status // empty' 2>/dev/null)"
     [ "$last" = "$want" ] && { echo "$want"; return 0; }
     sleep 5
   done
   echo "${last:-NONE}"
+  return 1
 }
 
 envoy_health() { # <cng ip> -> healthy | failed_active_hc | UNKNOWN
   local ip="$1" line
-  line="$(curl -s http://localhost:19901/clusters \
+  line="$(curl --connect-timeout 2 --max-time 5 -s http://localhost:19901/clusters \
     | grep -E "cng_cluster::${ip}:18098::health_flags" || true)"
   case "$line" in
     *healthy*)            echo "healthy" ;;
@@ -77,6 +80,18 @@ wait_envoy_healthy() {
     sleep 1
   done
   echo "$state"
+  return 1
+}
+
+wait_envoy_unhealthy() {
+  local ip="$1" secs="${2:-120}" state i
+  for i in $(seq 1 "$secs"); do
+    state="$(envoy_health "$ip")"
+    [ "$state" = failed_active_hc ] && { echo "$state"; return 0; }
+    sleep 1
+  done
+  echo "$state"
+  return 1
 }
 
 # assert_marker <exec-container> <query-host> -> prints "a", "b", or MISSING.
@@ -97,7 +112,7 @@ wait_envoy_healthy() {
 # fails setup loudly instead of degrading silently into "unattributed".
 assert_marker() {
   local exec_node="$1" query_host="$2" out
-  out="$(docker exec "$exec_node" curl -fsS -u Administrator:password \
+  out="$(docker exec "$exec_node" curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password \
     "http://${query_host}:8093/query/service" \
     --data-urlencode 'statement=SELECT RAW region FROM `lbtest` USE KEYS "region::marker"' \
     2>/dev/null || true)"
@@ -108,25 +123,49 @@ assert_marker() {
   esac
 }
 
+wait_init() { # compose invocation string; setup job must exit successfully
+  local compose="$1" container status
+  container="$($compose ps -aq init)" || return $?
+  [ -n "$container" ] || { echo "FAIL: no init container" >&2; FAIL=1; return 1; }
+  status="$(docker wait "$container")" || return $?
+  if [ "$status" != 0 ]; then
+    echo "FAIL: cluster init exit=$status" >&2
+    FAIL=1
+    return 1
+  fi
+}
+
+assert_stopped_membership() { # stopped node plus cluster's reported membership
+  local node="$1" want="$2" running pools
+  running="$(docker inspect --format '{{.State.Running}}' "$node")" || return $?
+  assert_eq "$node container stopped" "$running" false || return $?
+  pools="$(curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password http://localhost:8191/pools/default)" || return $?
+  assert_eq "$node membership after outage" "$(node_membership "$pools" "$node")" "$want"
+}
+
 stack_up() {
+  validate_output_dir || { FAIL=1; return 1; }
   stack_down
   # Otherwise an uploaded artifact mixes runs: a stale CSV or evidence file
   # left over from an earlier, possibly abandoned run would ship next to this
   # run's fresh output with no indication it is not current.
-  rm -rf "$OUT_DIR"
-  mkdir -p "$OUT_DIR"
-  "$CNG_DIR/net.sh" up
-  "$CNG_DIR/scripts/make-certs.sh"
-  docker build -t "$HARNESS_IMAGE" "$REPO/harness"
-  $COMPOSE_A up -d --build
-  $COMPOSE_B up -d --build
+  rm -rf "$OUT_DIR" || return $?
+  mkdir -p "$OUT_DIR" || return $?
+  ensure_run || return $?
+  "$CNG_DIR/net.sh" up || return $?
+  "$CNG_DIR/scripts/make-certs.sh" || return $?
+  docker build -t "$HARNESS_IMAGE" "$REPO/harness" || return $?
+  $COMPOSE_A up -d --build || return $?
+  $COMPOSE_B up -d --build || return $?
+  wait_init "$COMPOSE_A" || return $?
+  wait_init "$COMPOSE_B" || return $?
   echo "== waiting for both Observers =="
   assert_eq "region-a observer baseline" "$(wait_observer 8181 UP)" "UP"
   assert_eq "region-b observer baseline" "$(wait_observer 8182 UP)" "UP"
   echo "== asserting both region markers are readable before any scenario runs =="
   assert_eq "region-a marker readable" "$(assert_marker cb-a-data-1 cb-a-iq-1)" "a"
   assert_eq "region-b marker readable" "$(assert_marker cb-b-node-1 cb-b-node-1)" "b"
-  $COMPOSE_LB up -d
+  $COMPOSE_LB up -d || return $?
   echo "== waiting for Envoy to health-check both priorities =="
   assert_eq "envoy region-a baseline" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
   assert_eq "envoy region-b baseline" "$(wait_envoy_healthy 172.28.2.10)" "healthy"
@@ -137,8 +176,9 @@ stack_up() {
 # while traffic is flowing. Container name is cng-harness-<csv name>.
 run_harness() {
   local name="$1" secs="$2"; shift 2
-  docker rm -f "cng-harness-$name" >/dev/null 2>&1 || true
-  docker run -d --name "cng-harness-$name" --network cng-lb-net \
+  ensure_run || return $?
+  rm -f "$OUT_DIR/$name.csv" "$OUT_DIR/$name.exit-code"
+  docker run -d --name "cng-harness-$name" --label "cng.lb.run=$(cat "$OUT_DIR/run-id")" --network cng-lb-net \
     -v "$OUT_DIR:/out" \
     -v "$CNG_DIR/certs:/certs:ro" \
     -e CB_CONN="${CB_CONN:-couchbase2://cng-lb}" \
@@ -152,9 +192,20 @@ run_harness() {
     "$HARNESS_IMAGE" >/dev/null
 }
 
-wait_harness() { # <csv name>
-  docker wait "cng-harness-$1" >/dev/null 2>&1 || true
+wait_harness() { # <csv name>, preserve actual container exit before removing it
+  local status command_status=0
+  status="$(docker wait "cng-harness-$1")" || command_status=$?
+  docker logs "cng-harness-$1" >"$OUT_DIR/$1.harness.log" 2>&1 || true
+  docker inspect --format '{"image":{{json .Config.Image}},"image_id":{{json .Image}},"exit_code":{{.State.ExitCode}}}' "cng-harness-$1" >"$OUT_DIR/$1.harness.inspect.json" 2>&1 || true
+  printf '%s\n' "$status" >"$OUT_DIR/$1.exit-code"
   docker rm -f "cng-harness-$1" >/dev/null 2>&1 || true
+  if [ "$command_status" -ne 0 ] || [ "$status" != 0 ]; then
+    echo "FAIL: harness $1 exit=$status docker_wait_exit=$command_status" >&2
+    FAIL=1
+    return 1
+  fi
+  write_summary "$1" || { FAIL=1; return 1; }
+  cp "$OUT_DIR/run-id" "$OUT_DIR/$1.run-id" || return $?
 }
 
 csv_summary() { # <csv name> -> "ok=<n> err=<n>"
@@ -162,64 +213,134 @@ csv_summary() { # <csv name> -> "ok=<n> err=<n>"
     "$OUT_DIR/$1.csv"
 }
 
-# csv_regions <csv name> -> space separated regions in first-seen order,
-# e.g. "a b". This is how a switch is proven.
-csv_regions() {
-  awk -F, 'NR>1 && $5!="" && !seen[$5]++ {printf "%s%s", sep, $5; sep=" "} END {print ""}' \
-    "$OUT_DIR/$1.csv"
+# Only exact successful observations establish region. Upserts have no provenance.
+csv_regions() { python3 "$REPO/test/compose-cng/evidence.py" "$OUT_DIR/$1.csv" regions; }
+
+# Largest zero-success gap using completion times, not operation start times.
+# Partial successes can hide a permanent write outage. Recovery is separate.
+csv_error_window_ms() { python3 "$REPO/test/compose-cng/evidence.py" "$OUT_DIR/$1.csv" gap; }
+
+assert_recovery() {
+  if ! python3 "$REPO/test/compose-cng/evidence.py" "$OUT_DIR/$1.csv" recovery; then
+    FAIL=1
+    return 1
+  fi
+  echo "PASS: $1 get/upsert/query sustained final recovery (>=10s)"
 }
 
-# csv_error_window_ms <csv name> -> longest stretch in milliseconds containing
-# no successful operation, counting the whole run. This is the
-# customer-visible availability gap.
-#
-# A naive "first error to first success after it" measure is wrong here:
-# during a partial outage the surviving data node keeps serving some
-# vbuckets, so successes interleave with failures throughout the outage, and
-# that measure latches onto the first success after the very first error,
-# which can be a 1-2ms blip instead of the real multi-second outage.
-#
-# Measuring only gaps BETWEEN two "ok" rows is also wrong: it misses a
-# leading outage (failures before the first success) and a trailing outage
-# (failures running to the end of the run with no later success), because
-# neither has an "ok" row on both sides to measure between. The first
-# non-idle row's timestamp is the run's start boundary and the last
-# non-idle row's timestamp is its end boundary, so a leading or trailing gap
-# is measured against those instead of being skipped.
-#
-# -1 when the run recorded no successful operation at all: that is not a
-# passing zero-length window, it is an undefined gap, and the caller must
-# treat -1 as a failed bound, same as before.
-#
-# A scenario 6 style deliberate idle gap is not an outage: the harness marks
-# it with an "idle" row ("epoch_ms,idle,ok,0,,sleeping Ns") before it sleeps.
-# That span is skipped by advancing the last-success marker to the end of the
-# sleep, so a deliberate idle period never shows up as a measured gap.
-csv_error_window_ms() {
-  awk -F, '
-    NR>1 && $2=="idle" {
-      dur=$6
-      sub(/^sleeping /, "", dur)
-      sub(/s$/, "", dur)
-      idle_end=$1+dur*1000
-      if (prev=="" || idle_end>prev) prev=idle_end
-      next
-    }
-    NR>1 && $2!="idle" {
-      if (start=="") start=$1
-      end=$1
-      if ($3=="ok") {
-        if (prev=="") { g=$1-start } else { g=$1-prev }
-        if (g>max) max=g
-        prev=$1; seen=1
-      }
-    }
-    END {
-      if (!seen) { print -1; exit }
-      g=end-prev
-      if (g>max) max=g
-      print max+0
-    }' "$OUT_DIR/$1.csv"
+assert_negative() {
+  if ! python3 "$REPO/test/compose-cng/evidence.py" "$OUT_DIR/$1.csv" negative; then
+    FAIL=1
+    return 1
+  fi
+}
+
+epoch_ms() { python3 -c 'import time; print(time.time_ns() // 1000000)'; }
+record_fault() {
+  local at
+  at="$(epoch_ms)"
+  printf '%s\n' "$at" >"$OUT_DIR/$1.fault-ms"
+  printf '{"scenario":"%s","fault_epoch_ms":%s}\n' "$1" "$at" >>"$OUT_DIR/fault-events.jsonl"
+}
+
+ensure_run() {
+  mkdir -p "$OUT_DIR" || return $?
+  if [ ! -s "$OUT_DIR/run-id" ]; then
+    printf '%s-%s\n' "$(epoch_ms)" "$$" >"$OUT_DIR/run-id"
+    git -C "$REPO" rev-parse HEAD >"$OUT_DIR/commit.txt" || return $?
+    git -C "$REPO" diff >"$OUT_DIR/working-tree.patch" || return $?
+  fi
+}
+
+write_summary() {
+  local name="$1" fault=""
+  [ ! -f "$OUT_DIR/$name.fault-ms" ] || fault="$(cat "$OUT_DIR/$name.fault-ms")"
+  python3 "$REPO/test/compose-cng/evidence.py" "$OUT_DIR/$name.csv" summary "$fault" \
+    >"$OUT_DIR/$name.summary.json" || return $?
+}
+
+assert_overlap() { # exact region-b old-client samples during new-client healthy-a run
+  if ! python3 - "$OUT_DIR/$1.csv" "$OUT_DIR/$2.csv" "$3" >"$OUT_DIR/s7.overlap.summary.json" <<'PYOVERLAP'
+import csv, json, sys
+with open(sys.argv[1]) as stream: old = list(csv.DictReader(stream))
+with open(sys.argv[2]) as stream: new = list(csv.DictReader(stream))
+healthy = int(sys.argv[3])
+def exact(rows, region):
+    return [int(r['epoch_ms']) + int(r['latency_ms']) for r in rows if r['op'] in ('get', 'query') and r['outcome'] == 'ok' and r['region'] == region]
+a, b = exact(new, 'a'), exact(old, 'b')
+if not a or not b or min(int(r['epoch_ms']) for r in old) >= healthy:
+    raise SystemExit('FAIL: client baseline/region observations missing')
+left, right = max(healthy, min(a)), max(a)
+observations = [t for t in b if left <= t <= right]
+if not observations:
+    raise SystemExit('FAIL: no exact old-client region-b observations during healthy-a new-client run')
+print(json.dumps({'region_a_healthy_epoch_ms': healthy, 'overlap_start_epoch_ms': left, 'overlap_end_epoch_ms': right, 'old_client_region_b_observations': len(observations), 'new_client_region_a_observations': len(a)}, indent=2))
+PYOVERLAP
+  then
+    FAIL=1
+    return 1
+  fi
+}
+
+# Scenario10 comparison requires successful same-run scenario2, not stale CSV.
+require_s2_baseline() {
+  if [ ! -s "$OUT_DIR/run-id" ] || [ ! -s "$OUT_DIR/s2.passed-run-id" ] \
+      || [ "$(cat "$OUT_DIR/run-id")" != "$(cat "$OUT_DIR/s2.passed-run-id")" ] \
+      || [ "$(cat "$OUT_DIR/s2.exit-code" 2>/dev/null)" != 0 ] \
+      || ! python3 "$REPO/test/compose-cng/evidence.py" "$OUT_DIR/s2.csv" recovery; then
+    echo "FAIL: s10 requires successful same-run s2 baseline" >&2
+    FAIL=1
+    return 1
+  fi
+}
+
+validate_output_dir() {
+  python3 - "$OUT_DIR" "$REPO" <<'PYOUT'
+import pathlib, sys, tempfile
+raw = sys.argv[1]
+path, repo = pathlib.Path(raw).resolve(), pathlib.Path(sys.argv[2]).resolve()
+roots = {pathlib.Path('/tmp').resolve(), pathlib.Path(tempfile.gettempdir()).resolve()}
+inside_temp = any(root in path.parents for root in roots)
+if not raw.strip() or not inside_temp or path in roots or path == repo or repo in path.parents or path in repo.parents or pathlib.Path(raw).is_symlink():
+    raise SystemExit('unsafe OUT_DIR: ' + raw)
+PYOUT
+}
+
+cleanup_harnesses() {
+  [ -s "$OUT_DIR/run-id" ] || return 0
+  local containers container name fault status=0
+  containers="$(docker ps -a --filter "label=cng.lb.run=$(cat "$OUT_DIR/run-id")" --format '{{.Names}}')" || return $?
+  for container in $containers; do
+    case "$container" in cng-harness-*) ;; *) continue ;; esac
+    name="${container#cng-harness-}"
+    docker logs "$container" >"$OUT_DIR/$name.harness.log" 2>&1 || true
+    docker inspect --format '{"image":{{json .Config.Image}},"image_id":{{json .Image}},"running":{{.State.Running}},"exit_code":{{.State.ExitCode}}}' "$container" >"$OUT_DIR/$name.harness.inspect.json" 2>&1 || true
+    # Stop writer before measuring partial CSV, then remove only labelled workload.
+    docker stop "$container" >"$OUT_DIR/$name.cleanup.log" 2>&1 || true
+    fault=""
+    [ ! -f "$OUT_DIR/$name.fault-ms" ] || fault="$(cat "$OUT_DIR/$name.fault-ms")"
+    python3 "$REPO/test/compose-cng/evidence.py" "$OUT_DIR/$name.csv" summary "$fault" \
+      >"$OUT_DIR/$name.partial.summary.json" 2>"$OUT_DIR/$name.partial.summary.error" || true
+    docker rm -f "$container" >>"$OUT_DIR/$name.cleanup.log" 2>&1 || status=$?
+  done
+  return "$status"
+}
+
+capture_artifacts() {
+  [ -d "$OUT_DIR" ] || return 0
+  docker version >"$OUT_DIR/docker-version.txt" 2>&1 || true
+  $COMPOSE_A config >"$OUT_DIR/compose-a.yml" 2>&1 || true
+  $COMPOSE_B config >"$OUT_DIR/compose-b.yml" 2>&1 || true
+  $COMPOSE_LB config >"$OUT_DIR/compose-lb.yml" 2>&1 || true
+  cp "$CNG_DIR/envoy/envoy.yaml" "$OUT_DIR/envoy.yaml" || true
+  local node
+  for node in $REGION_A_NODES cng-a cb-a-observer cb-b-node-1 cng-b cb-b-observer cng-envoy cb-a-init cb-b-init; do
+    docker logs "$node" >"$OUT_DIR/$node.log" 2>&1 || true
+    docker inspect --format '{"image":{{json .Config.Image}},"image_id":{{json .Image}},"running":{{.State.Running}}}' "$node" >"$OUT_DIR/$node.inspect.json" 2>&1 || true
+    local image
+    image="$(docker inspect --format '{{.Image}}' "$node" 2>/dev/null)" || continue
+    docker image inspect --format '{"id":{{json .Id}},"digests":{{json .RepoDigests}},"os":{{json .Os}},"architecture":{{json .Architecture}}}' "$image" >"$OUT_DIR/$node.image.json" 2>&1 || true
+  done
 }
 
 # node_membership <pools/default json> <node short name> -> prints the
@@ -255,7 +376,7 @@ node_membership() {
 wait_pools_default() {
   local secs="${1:-60}" i pools count
   for i in $(seq 1 "$secs"); do
-    pools="$(curl -fsS -u Administrator:password http://localhost:8191/pools/default 2>/dev/null || true)"
+    pools="$(curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password http://localhost:8191/pools/default 2>/dev/null || true)"
     count="$(echo "$pools" | jq -r '.nodes | length' 2>/dev/null || true)"
     if [ -n "$count" ] && [ "$count" -gt 0 ] 2>/dev/null; then
       echo "$pools"
@@ -284,7 +405,7 @@ wait_pools_default() {
 wait_rebalance_idle() {
   local secs="${1:-120}" i tasks status err
   for i in $(seq 1 "$secs"); do
-    tasks="$(curl -fsS -u Administrator:password http://localhost:8191/pools/default/tasks 2>/dev/null || true)"
+    tasks="$(curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password http://localhost:8191/pools/default/tasks 2>/dev/null || true)"
     status="$(echo "$tasks" | jq -r '.[] | select(.type=="rebalance") | .status' 2>/dev/null)"
     if [ "$status" = "notRunning" ]; then
       err="$(echo "$tasks" | jq -r '.[] | select(.type=="rebalance") | .errorMessage // empty' 2>/dev/null)"
@@ -336,7 +457,7 @@ recover_region_a() {
   # exactly the kind of call-site-order fragility this function exists to
   # remove.
   for n in $REGION_A_NODES cng-a cb-a-observer; do
-    docker start "$n" >/dev/null 2>&1 || true
+    docker start "$n" >/dev/null || return $?
   done
 
   echo "-- waiting for cb-a-data-1's management API to answer pools/default --"
@@ -362,7 +483,7 @@ recover_region_a() {
     if [ -z "$membership" ]; then
       echo "-- $n absent from pools/default, re-adding --"
       if docker exec cb-a-data-1 bash -c \
-          "for _ in \$(seq 1 60); do curl -sS -o /dev/null http://$n:8091 2>/dev/null && exit 0; sleep 3; done; exit 1"; then
+          "for _ in \$(seq 1 60); do curl --connect-timeout 2 --max-time 5 -sS -o /dev/null http://$n:8091 2>/dev/null && exit 0; sleep 3; done; exit 1"; then
         if docker exec cb-a-data-1 /opt/couchbase/bin/couchbase-cli server-add \
             --cluster https://cb-a-data-1:18091 \
             --username Administrator --password password \
@@ -433,7 +554,7 @@ recover_region_a() {
   assert_eq "region-a observer UP after recovery" "$(wait_observer 8181 UP)" "UP"
 
   echo "== recover_region_a: verifying all five nodes are active =="
-  pools="$(curl -fsS -u Administrator:password http://localhost:8191/pools/default 2>/dev/null || true)"
+  pools="$(curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password http://localhost:8191/pools/default 2>/dev/null || true)"
   for n in $REGION_A_NODES; do
     membership="$(node_membership "$pools" "$n")"
     assert_eq "region-a $n active after recovery" "$membership" "active"
@@ -444,4 +565,5 @@ recover_region_a() {
   # healthy_threshold (2) x interval (5s) of passing checks first, so wait
   # for that too before declaring region-a recovered.
   assert_eq "region-a envoy healthy after recovery" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
+  [ "$FAIL" -eq 0 ]
 }

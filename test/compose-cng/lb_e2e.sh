@@ -15,8 +15,8 @@
 # switch, restores region-a mid-scenario, and asserts what happens to an
 # already-open connection versus a brand new one.
 #
-# Spec: delivery vault, CNG design and plan
-set -uo pipefail
+# Spec: delivery vault CNG load balancer failover design and readiness correction plan.
+set -Eeuo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/lib.sh"
 
@@ -29,8 +29,9 @@ scenario_1() {
   # early request. This does not touch the zero-error assertion below: a
   # baseline that tolerates errors stops being a baseline.
   sleep 20
-  run_harness s1 30
-  wait_harness s1
+  run_harness s1 30 || return $?
+  wait_harness s1 || return $?
+  assert_recovery s1 || return $?
   assert_eq "s1 no errors" "$(csv_summary s1 | sed 's/.*err=//')" "0"
   assert_eq "s1 served by region-a only" "$(csv_regions s1)" "a"
 }
@@ -39,16 +40,20 @@ scenario_2() {
   echo "== scenario 2: one region-a data node lost, auto-failover absorbs, expect NO switch =="
   # 150s covers the ~10s detection, the 30s auto-failover, the rebalance, and
   # enough margin past the 60s Envoy window to prove the switch did not happen.
-  run_harness s2 150
+  rm -f "$OUT_DIR/s2.passed-run-id"
+  run_harness s2 150 || return $?
   sleep 10
   echo "-- stopping cb-a-data-2 --"
+  record_fault s2
   docker stop cb-a-data-2 >/dev/null
-  wait_harness s2
+  wait_harness s2 || return $?
+  assert_recovery s2 || return $?
+  assert_stopped_membership cb-a-data-2 inactiveFailed || return $?
   assert_eq "s2 served by region-a only (no switch)" "$(csv_regions s2)" "a"
   assert_eq "s2 envoy kept region-a healthy" "$(envoy_health 172.28.1.10)" "healthy"
   local win; win="$(csv_error_window_ms s2)"
-  echo "s2 error window: ${win}ms"
-  assert_le "s2 recovered inside 60s" "$win" "60000"
+  echo "s2 zero-success gap: ${win}ms"
+  assert_le "s2 zero-success gap inside 60s" "$win" "60000"
   # Auto-failover absorbed the single-node loss above, which marks the node
   # "inactiveFailed" in pools/default: Couchbase leaves it listed, it does
   # NOT remove it, so a plain "docker start" brings the container back but
@@ -57,7 +62,8 @@ scenario_2() {
   # back to "active" before any later scenario relies on region-a having all
   # three data nodes.
   echo "-- restoring cb-a-data-2 (auto-failover marked it inactiveFailed, not removed) --"
-  recover_region_a
+  recover_region_a || return $?
+  cp "$OUT_DIR/run-id" "$OUT_DIR/s2.passed-run-id" || return $?
 }
 
 scenario_3() {
@@ -66,20 +72,24 @@ scenario_3() {
   # its full 5-node baseline before this scenario's "stop two data nodes"
   # is asked to mean what it claims. Expected to find nothing to do.
   echo "-- verifying region-a is at full baseline before this scenario --"
-  recover_region_a
+  recover_region_a || return $?
   # Both nodes are stopped together so auto-failover cannot absorb either: with
   # replica 1 on three data nodes, the second failover would risk data loss and
   # is refused, so the Observer stays DOWN and the 60s window elapses.
-  run_harness s3 180
+  run_harness s3 180 || return $?
   sleep 10
   echo "-- stopping cb-a-data-2 and cb-a-data-3 --"
+  record_fault s3
   docker stop cb-a-data-2 cb-a-data-3 >/dev/null
-  wait_harness s3
+  wait_harness s3 || return $?
+  assert_recovery s3 || return $?
+  assert_stopped_membership cb-a-data-2 active || return $?
+  assert_stopped_membership cb-a-data-3 active || return $?
   assert_eq "s3 switched region-a to region-b" "$(csv_regions s3)" "a b"
   assert_eq "s3 envoy marked region-a unhealthy" "$(envoy_health 172.28.1.10)" "failed_active_hc"
   local win; win="$(csv_error_window_ms s3)"
-  echo "s3 error window across the switch: ${win}ms"
-  assert_le "s3 recovered inside 120s" "$win" "120000"
+  echo "s3 zero-success gap across the switch: ${win}ms"
+  assert_le "s3 zero-success gap inside 120s" "$win" "120000"
 }
 
 scenario_4() {
@@ -92,20 +102,22 @@ scenario_4() {
   # detection path: this is a real defect found by running the suite,
   # confirmed by scenario 4 originally showing regions=[b] with zero errors.
   echo "-- verifying region-a is at full baseline before this scenario --"
-  recover_region_a
+  recover_region_a || return $?
   assert_eq "s4 envoy routing to region-a before starting" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
   # This is a different detection path from scenario 3: Envoy gets connection
   # refused rather than a 503, and a connection failure counts toward
   # unhealthy_threshold in the normal way.
-  run_harness s4 180
+  run_harness s4 180 || return $?
   sleep 10
   echo "-- stopping every region-a container --"
+  record_fault s4
   docker stop $REGION_A_NODES cng-a cb-a-observer >/dev/null
-  wait_harness s4
+  wait_harness s4 || return $?
+  assert_recovery s4 || return $?
   assert_eq "s4 switched region-a to region-b" "$(csv_regions s4)" "a b"
   assert_eq "s4 envoy marked region-a unhealthy" "$(envoy_health 172.28.1.10)" "failed_active_hc"
   local win; win="$(csv_error_window_ms s4)"
-  echo "s4 error window across the switch: ${win}ms"
+  echo "s4 zero-success gap across the switch: ${win}ms"
   # Bound derived, not fitted to an observation: worst case on this path is
   # unhealthy_threshold x (interval + timeout) = 12 x (5s + 4s) = 108s,
   # because a stopped container gives no RST so every check burns its full
@@ -114,7 +126,7 @@ scenario_4() {
   # absorb SDK reconnect and rebalance jitter without blinding the assertion.
   # The switch itself is asserted independently above, so a genuine failover
   # failure still fails regardless of this bound.
-  assert_le "s4 recovered inside 150s" "$win" "150000"
+  assert_le "s4 zero-success gap inside 150s" "$win" "150000"
 }
 
 scenario_5() {
@@ -131,23 +143,22 @@ scenario_5() {
   # "the SDK's own timeout fired" would need measuring connection-establishment
   # time or the SDK's error class directly, which this harness does not do.
   echo "-- stopping region-b as well --"
+  record_fault s5
   docker stop cb-b-node-1 cng-b cb-b-observer >/dev/null
-  sleep 80
-  run_harness s5 30
-  wait_harness s5
-  assert_eq "s5 zero successes" "$(csv_summary s5 | sed 's/ err=.*//; s/ok=//')" "0"
-  # Every operation must fail within its own 2s KV timeout budget, not hang
-  # past it. This does not show errors arrive "promptly" (well inside the
-  # budget): the recorded rows sit at 2000-2023ms, i.e. right at the timeout.
-  local slow
-  slow="$(awk -F, 'NR>1 && $2!="idle" && $4>2500 {c++} END {print c+0}' "$OUT_DIR/s5.csv")"
-  assert_eq "s5 no operation exceeded 2500ms" "$slow" "0"
+  assert_eq "s5 region-a endpoint unhealthy" "$(wait_envoy_unhealthy 172.28.1.10 120)" "failed_active_hc" || return $?
+  assert_eq "s5 region-b endpoint unhealthy" "$(wait_envoy_unhealthy 172.28.2.10 120)" "failed_active_hc" || return $?
+  run_harness s5 30 || return $?
+  wait_harness s5 || return $?
+  assert_negative s5 || return $?
+  echo "PASS: s5 actual get/upsert errors, zero successes; KV <=2500ms, query <=5500ms"
+  echo "Measured timeout bounds only; panic-mode rejection speed is unmeasured."
+
 }
 
 scenario_6() {
   echo "== scenario 6: idle client then resume, expect recovery =="
-  # grpc-java sets no client keepalive, so this proves Envoy's 1h idle_timeout
-  # is not silently resetting quiet channels and masquerading as a failover.
+  # Measures client recovery after the configured idle interval. Longer
+  # quiet periods and transport keepalive behavior are outside this scenario.
   echo "-- restoring both regions --"
   docker start $REGION_A_NODES cng-a cb-a-observer cb-b-node-1 cng-b cb-b-observer >/dev/null
   # Scenario 4 stopped every region-a node at once while the cluster was
@@ -155,11 +166,12 @@ scenario_6() {
   # cleanly on restart. recover_region_a is membership-aware, so it verifies
   # that instead of assuming it: it repairs anything not "active" and asserts
   # all five nodes are active before this scenario relies on region-a.
-  recover_region_a
+  recover_region_a || return $?
   assert_eq "s6 envoy routing to region-a before starting" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
   sleep 30
-  run_harness s6 120 -e IDLE_AT_SECOND=15 -e IDLE_SECONDS=60
-  wait_harness s6
+  run_harness s6 120 -e IDLE_AT_SECOND=15 -e IDLE_SECONDS=60 || return $?
+  wait_harness s6 || return $?
+  assert_recovery s6 || return $?
   # Operations after the idle gap must succeed. The idle marker line splits the
   # file, so count errors only after it. A harness that died before ever
   # reaching the idle sleep would leave "seen" at 0 and both counts at 0,
@@ -203,19 +215,20 @@ scenario_7() {
   local doc="stranded::$(date +%s)"
 
   echo "-- forcing a switch to region-b --"
+  record_fault s7
   docker stop cb-a-data-2 cb-a-data-3 >/dev/null
   sleep 90
   assert_eq "s7 envoy on region-b" "$(envoy_health 172.28.1.10)" "failed_active_hc"
 
-  echo "-- writing $doc through the LB while region-b is serving --"
+  echo "-- writing $doc directly to region-b for no-replication proof --"
   # Write the marker document directly into region-b so the identity is exact.
-  docker exec cb-b-node-1 curl -fsS -u Administrator:password \
+  docker exec cb-b-node-1 curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password \
     http://cb-b-node-1:8093/query/service \
     --data-urlencode "statement=UPSERT INTO \`lbtest\` (KEY, VALUE) VALUES (\"$doc\", {\"written_in\":\"b\"})" \
     >/dev/null
   echo "-- confirming it is readable while region-b serves --"
   local before
-  before="$(docker exec cb-b-node-1 curl -fsS -u Administrator:password \
+  before="$(docker exec cb-b-node-1 curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password \
     http://cb-b-node-1:8093/query/service \
     --data-urlencode "statement=SELECT RAW COUNT(*) FROM \`lbtest\` USE KEYS \"$doc\"" \
     | jq -r '.results[0]')"
@@ -226,29 +239,32 @@ scenario_7() {
   # it connects there. The question this scenario answers is what happens to
   # THIS connection once region-a comes back, not whether a brand new
   # connection would pick region-a (it does; see the second client below).
-  run_harness s7-longlived 240
+  run_harness s7-longlived 240 || return $?
   sleep 10
   echo "-- restoring region-a and waiting for Envoy to mark it healthy again --"
   docker start cb-a-data-2 cb-a-data-3 >/dev/null
-  assert_eq "s7 region-a observer recovered" "$(wait_observer 8181 UP)" "UP"
-  assert_eq "s7 envoy marks region-a healthy again" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
+  assert_eq "s7 region-a observer recovered" "$(wait_observer 8181 UP)" "UP" || return $?
+  assert_eq "s7 envoy marks region-a healthy again" "$(wait_envoy_healthy 172.28.1.10)" "healthy" || return $?
 
-  echo "-- the long-lived client's connection predates the recovery: it should NOT move --"
-  wait_harness s7-longlived
+  epoch_ms >"$OUT_DIR/s7.region-a-healthy-ms"
+  echo "-- opening new client while long-lived client is still running --"
+  run_harness s7-newclient 30 || return $?
+  wait_harness s7-newclient || return $?
+  assert_recovery s7-newclient || return $?
+  wait_harness s7-longlived || return $?
+  assert_recovery s7-longlived || return $?
+  assert_overlap s7-longlived s7-newclient "$(cat "$OUT_DIR/s7.region-a-healthy-ms")" || return $?
   local longlived_region
   longlived_region="$(csv_regions s7-longlived)"
   assert_eq "s7 long-lived client stayed on region-b" "$longlived_region" "b"
 
-  echo "-- a brand new client, opened only now, should land on region-a --"
-  run_harness s7-newclient 30
-  wait_harness s7-newclient
   local newclient_region
   newclient_region="$(csv_regions s7-newclient)"
   assert_eq "s7 new client landed on region-a" "$newclient_region" "a"
 
   echo "-- the point: the region-b write is still not visible in region-a --"
   local after
-  after="$(docker exec cb-a-data-1 curl -fsS -u Administrator:password \
+  after="$(docker exec cb-a-data-1 curl --connect-timeout 2 --max-time 5 -fsS -u Administrator:password \
     http://cb-a-iq-1:8093/query/service \
     --data-urlencode "statement=SELECT RAW COUNT(*) FROM \`lbtest\` USE KEYS \"$doc\"" \
     | jq -r '.results[0]')"
@@ -268,12 +284,12 @@ scenario_7() {
       echo "count in region-a after region-a recovered: $after"
       echo
       echo "What happened: a long-lived client that connected to region-b"
-      echo "during the outage stayed on region-b for the rest of its life,"
-      echo "even after region-a recovered and Envoy marked it healthy again."
-      echo "A brand new client, opened at that same later moment against the"
+      echo "during the outage stayed on region-b for the rest of this recorded run,"
+      echo "including the interval when region-a was healthy and the new client ran."
+      echo "A new client, opened during the recovered healthy-a interval against the"
       echo "same load balancer, landed on region-a instead."
       echo
-      echo "Mechanism: Envoy's L4 priority routing picks an upstream only when"
+      echo "Configuration interpretation: Envoy's L4 priority routing picks an upstream only when"
       echo "a connection is opened. close_connections_on_host_health_failure"
       echo "evicts connections when a host goes unhealthy, but there is no"
       echo "equivalent eviction when a host becomes healthy again, so an"
@@ -286,7 +302,7 @@ scenario_7() {
       echo "no XDCR between the two clusters neither side ever sees the"
       echo "other's writes. This is application-tier split-brain, not a"
       echo "one-time stranded write, and it is why manual, coordinated"
-      echo "failback is a hard requirement on whatever load balancer the customer"
+      echo "failback is a hard requirement on whatever load balancer the application"
       echo "deploys."
     } > "$OUT_DIR/s7-stranded.txt"
     echo "wrote $OUT_DIR/s7-stranded.txt"
@@ -333,6 +349,7 @@ error_profile() {
 }
 
 scenario_10() {
+  require_s2_baseline || return $?
   echo "== scenario 10: kill the node --cb-host names, cluster otherwise healthy =="
   # region-a CNG is started with --cb-host=cb-a-data-1 and there is no
   # bootstrap list. Auto-failover absorbs the node loss, so the CLUSTER is fine
@@ -347,23 +364,25 @@ scenario_10() {
   # would silently flip. Verify the baseline explicitly, the same way
   # scenarios 3, 4 and 6 do.
   echo "-- verifying region-a is at full baseline before this scenario --"
-  recover_region_a
+  recover_region_a || return $?
   assert_eq "s10 envoy routing to region-a before starting" "$(wait_envoy_healthy 172.28.1.10)" "healthy"
 
-  run_harness s10 180
+  run_harness s10 180 || return $?
   sleep 10
   echo "-- stopping cb-a-data-1, the CNG bootstrap node --"
+  record_fault s10
   docker stop cb-a-data-1 >/dev/null
   sleep 90
   local obs cngweb envoyflag
-  obs="$(curl -s http://localhost:8181/health/couchbase | jq -r '.status // "NONE"')"
-  cngweb="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9191/health)"
+  obs="$(curl --connect-timeout 2 --max-time 5 -s http://localhost:8181/health/couchbase | jq -r '.status // "NONE"')"
+  cngweb="$(curl --connect-timeout 2 --max-time 5 -s -o /dev/null -w '%{http_code}' http://localhost:9191/health)"
   envoyflag="$(envoy_health 172.28.1.10)"
   # Self-closing evidence: if the CNG probes above ever look wrong, cng-a's
   # own recent log lines are captured right here rather than requiring a
   # separate manual repro.
   docker logs --tail 200 cng-a > "$OUT_DIR/s10-cng-logs.txt" 2>&1 || true
-  wait_harness s10
+  wait_harness s10 || return $?
+  assert_recovery s10 || return $?
   local regions summary
   regions="$(csv_regions s10)"
   summary="$(csv_summary s10)"
@@ -428,7 +447,8 @@ scenario_10() {
     echo "wrote $OUT_DIR/s10-cng-bootstrap.txt (no verdict, missing s2 baseline)"
     echo "-- restoring cb-a-data-1 (auto-failover marked it inactiveFailed, not removed) --"
     recover_region_a
-    return
+    FAIL=1
+    return 1
   fi
 
   local comparable
@@ -491,8 +511,8 @@ scenario_10() {
       echo "${s10_span}s) in the same range as scenario 2's ordinary"
       echo "absorbed-node-loss baseline (err=$s2_err/$s2_total, ${s2_pct}%, spanning"
       echo "${s2_span}s), which never touches CNG's bootstrap node at all. That"
-      echo "means the disruption clients saw here came from the normal"
-      echo "vbucket movement during auto-failover, not from the gateway."
+      echo "The profiles are comparable in this run. This comparison does"
+      echo "not isolate the cause of each error."
       echo
       echo "Envoy kept routing to region-a throughout, so this scenario"
       echo "never had to exercise a switch, but that is a statement about"
@@ -503,18 +523,16 @@ scenario_10() {
       echo "is why the verdict above rests on CNG's own web port and the"
       echo "real traffic profile, not on Envoy's view."
       echo
-      echo "This closes a real risk: naming a single host with --cb-host"
-      echo "does not make CNG a single point of failure when that specific"
-      echo "node goes down and auto-failover absorbs it."
+      echo "For this run, loss of the configured bootstrap node did not"
+      echo "prevent terminal get/upsert/query recovery. Other gateway failure"
+      echo "modes are outside this measurement."
     else
       echo "RESULT: CNG did NOT cleanly survive the loss of its bootstrap"
       echo "node while the cluster stayed healthy. Specifics: cng_web_200=$cng_ok"
       echo "envoy_healthy=$envoy_ok stayed_on_region_a=$routing_ok"
-      echo "error_profile_comparable_to_s2=$comparable. This is a gateway"
-      echo "dead (or degraded beyond the ordinary failover blip) in front of"
-      echo "a live cluster, and neither the Observer nor the load balancer"
-      echo "detects it, because both report on the CLUSTER. It changes the"
-      echo "CNG tier design and belongs in the PM conversation."
+      echo "error_profile_comparable_to_s2=$comparable. Recorded signals did"
+      echo "not meet this scenario's criteria. This run does not isolate a"
+      echo "gateway failure mechanism."
     fi
   } > "$OUT_DIR/s10-cng-bootstrap.txt"
   echo "wrote $OUT_DIR/s10-cng-bootstrap.txt"
@@ -526,7 +544,7 @@ scenario_10() {
   # verifies all five nodes are active before any later scenario relies on
   # region-a being at full baseline.
   echo "-- restoring cb-a-data-1 (auto-failover marked it inactiveFailed, not removed) --"
-  recover_region_a
+  recover_region_a || return $?
 }
 
 # tls_verify_code <cafile> -> the "Verify return code" number openssl reports
@@ -542,8 +560,16 @@ scenario_10() {
 # and against the real CA, independent of the SDK's timeout-shaped errors.
 tls_verify_code() {
   local cafile="$1" out
-  out="$(openssl s_client -connect localhost:18098 -CAfile "$cafile" </dev/null 2>&1 \
-    | sed -n 's/.*Verify return code: \([0-9]*\).*/\1/p')"
+  out="$(python3 - "$cafile" <<'PYTLS'
+import subprocess, sys
+try:
+    result = subprocess.run(['openssl', 's_client', '-connect', 'localhost:18098', '-servername', 'cng-lb', '-CAfile', sys.argv[1]], input='', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10)
+    print(result.stdout)
+except (OSError, subprocess.TimeoutExpired):
+    pass
+PYTLS
+  )"
+  out="$(printf '%s\n' "$out" | sed -n 's/.*Verify return code: \([0-9]*\).*/\1/p' | tail -1)"
   echo "${out:-NONE}"
 }
 
@@ -554,11 +580,8 @@ scenario_8() {
   # verification against the WRONG CA must fail, proving the chain is really
   # being checked rather than quietly skipped.
   #
-  # This scenario does not itself verify region-a is reachable right before
-  # the negative-control run below: it relies on scenario_10's trailing
-  # recover_region_a (Observer UP, Envoy healthy) having just run with no
-  # disruptive step in between. If the scenario order ever changes, add that
-  # check here explicitly rather than assuming it still holds.
+  recover_region_a || return $?
+  assert_eq "s8 own healthy region-a baseline" "$(wait_envoy_healthy 172.28.1.10)" healthy || return $?
   echo "-- negative control: verify against a CA that did not sign the cert --"
   local bad; bad="$(mktemp -d)"
   openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
@@ -569,9 +592,11 @@ scenario_8() {
   local bad_code
   bad_code="$(tls_verify_code "$bad/other.crt")"
   echo "s8 openssl verify code against the bad CA: $bad_code (0 would mean it wrongly verified)"
-  if [ "$bad_code" = "0" ]; then
-    echo "FAIL: s8 bad CA should not verify (openssl verify code 0)"
+  if ! [[ "$bad_code" =~ ^[0-9]+$ ]] || [ "$bad_code" -eq 0 ]; then
+    echo "FAIL: s8 bad CA requires actual nonzero numeric verify code (got $bad_code)"
     FAIL=1
+    rm -rf "$bad"
+    return 1
   else
     echo "PASS: s8 bad CA fails verification (openssl verify code $bad_code)"
   fi
@@ -581,7 +606,9 @@ scenario_8() {
     -e CB_CONN='couchbase2://cng-lb' -e TLS_CA=/bad/other.crt \
     -e CB_BUCKET=lbtest -e RUN_SECONDS=15 -e OPS_PER_SEC=5 \
     -e OUT_CSV=/out/s8-neg.csv \
-    "$HARNESS_IMAGE" >/dev/null 2>&1 || true
+    "$HARNESS_IMAGE" >"$OUT_DIR/s8-neg.harness.log" 2>&1 || return $?
+  assert_negative s8-neg || return $?
+  write_summary s8-neg || return $?
   rm -rf "$bad"
   assert_eq "s8 wrong CA yields zero successes" \
     "$(csv_summary s8-neg | sed 's/ err=.*//; s/ok=//')" "0"
@@ -592,25 +619,27 @@ scenario_8() {
   assert_eq "s8 correct CA verifies (openssl verify code 0)" "$good_code" "0"
 
   echo "-- positive: correct CA, force a switch, expect a clean flip --"
-  docker start cb-a-data-2 cb-a-data-3 >/dev/null 2>&1 || true
+  docker start cb-a-data-2 cb-a-data-3 >/dev/null || return $?
   assert_eq "s8 region-a observer healthy before the run" "$(wait_observer 8181 UP)" "UP"
   sleep 30
   docker compose -p cng-lb -f "$CNG_DIR/envoy/docker-compose.yml" up -d --force-recreate >/dev/null
   sleep 20
-  run_harness s8 180
+  run_harness s8 180 || return $?
   sleep 10
+  record_fault s8
   docker stop cb-a-data-2 cb-a-data-3 >/dev/null
-  wait_harness s8
+  wait_harness s8 || return $?
+  assert_recovery s8 || return $?
   assert_eq "s8 switched under verified TLS" "$(csv_regions s8)" "a b"
   local win; win="$(csv_error_window_ms s8)"
-  echo "s8 error window across the switch: ${win}ms"
-  assert_le "s8 recovered inside 120s" "$win" "120000"
+  echo "s8 zero-success gap across the switch: ${win}ms"
+  assert_le "s8 zero-success gap inside 120s" "$win" "120000"
 }
 
 probe_cng_web() { # -> HTTP code from CNG's own web port, 5 tries/15s to ride out a transient blip
   local code
   for _ in 1 2 3 4 5; do
-    code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9191/health)"
+    code="$(curl --connect-timeout 2 --max-time 5 -s -o /dev/null -w '%{http_code}' http://localhost:9191/health)"
     [ "$code" != "000" ] && { echo "$code"; return 0; }
     sleep 3
   done
@@ -625,51 +654,12 @@ cng_diagnostics() { # dumps cng-a's running state and recent logs when a probe l
 
 capture_cng_readiness() {
   echo "== evidence: does CNG's /health latch healthy, or does it track the cluster? =="
-  # In couchbase/stellar-gateway, /ready and its alias /health read one
-  # boolean. MarkSystemHealthy() is called once at startup and
-  # MarkSystemUnhealthy() has ZERO callers on master, v1.0 and v1.1 (the only
-  # tags that repo has at the time of writing; there is no v1.1 tag, and no
-  # v1.2.x tag either). The image actually measured below is
-  # couchbase/cloud-native-gateway:1.2.1, whose exact matching source has NOT
-  # been inspected: this reads its docker image tag versioning as unrelated to
-  # the stellar-gateway repo's own git tags, so the caller-count claim above is
-  # carried forward from master/v1.0/v1.0.1 by inference, not verified against
-  # 1.2.1 itself. The measurement immediately below is what is actually
-  # verified for 1.2.1; the source-reading claim is corroborating context, not
-  # independently confirmed for this exact image. So /ready is being claimed
-  # to answer "did startup complete once", not "is the backend reachable".
-  #
-  # The documentation claims the opposite: "returns HTTP 200 only when Cloud
-  # Native Gateway has connected to the Couchbase cluster, and HTTP 503
-  # otherwise".
-  #
-  # Scenario 10 already showed CNG's /health returning 200 while its
-  # --cb-host bootstrap node was down, but the cluster stayed healthy there,
-  # so it did not exercise the latch. This removes the whole region-a
-  # cluster while leaving CNG running, which is the real test, and this is
-  # the concrete answer to "why does Observer exist when CNG has a health
-  # endpoint": measured evidence, not an argument from reading source alone.
-  #
-  # This measurement can legitimately come out either way. If CNG returns
-  # 503 here against a verified healthy baseline, the latch has been fixed
-  # in this image tag and the finding is void for that version: recorded as
-  # such below, not adjusted to match the claim.
-  #
-  # A "before" reading is only meaningful against a cluster that is actually
-  # up. This function is called right after scenario_8, which deliberately
-  # ends with cb-a-data-2 and cb-a-data-3 stopped (its own switch test), so
-  # capture_cng_readiness must not trust the ambient state: it repairs
-  # region-a itself and REQUIRES the baseline to verify healthy before it
-  # takes any reading. A curl HTTP code of "000" means the connection never
-  # completed, i.e. no response was received. That is not a data point about
-  # CNG being unhealthy, it means the probe did not reach CNG at all, so it
-  # is never treated as a 503 or as any other real answer: if either the
-  # baseline or the post-outage probe comes back "000" (or anything besides
-  # 200/503), this writes NO verdict rather than an inferred one.
+  # Measures /health only for the inspected image. No /ready or gRPC claim.
+  # Establish independent healthy baseline before removing region-a backend.
   local cng_image before_obs before_cng after_obs after_cng
 
   echo "-- restoring region-a to a known-good baseline before measuring (scenario 8 leaves it degraded) --"
-  recover_region_a
+  recover_region_a || return $?
   cng_image="$(docker inspect --format='{{.Config.Image}}' cng-a 2>/dev/null || echo unknown)"
 
   echo "-- verifying the baseline: Observer UP and CNG /health 200 before taking any 'before' reading --"
@@ -701,10 +691,11 @@ capture_cng_readiness() {
   fi
 
   echo "-- taking region-a's cluster down while leaving CNG running (image: $cng_image) --"
+  record_fault readiness
   docker stop $REGION_A_NODES >/dev/null
   sleep 60
 
-  after_obs="$(curl -s http://localhost:8181/health/couchbase | jq -r '.status // "NONE"')"
+  after_obs="$(curl --connect-timeout 2 --max-time 5 -s http://localhost:8181/health/couchbase | jq -r '.status // "NONE"')"
   after_cng="$(probe_cng_web)"
   echo "observer=$after_obs cng_web_http=$after_cng cng_image=$cng_image"
 
@@ -733,7 +724,7 @@ capture_cng_readiness() {
     return 1
   fi
 
-  assert_eq "CNG /health still reports 200 with the cluster gone (latch; a 503 here means the finding is void for $cng_image)" "$after_cng" "200"
+  # Both HTTP outcomes are valid evidence. The probe does not assume a latch.
 
   {
     echo "CNG readiness latch, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -749,29 +740,9 @@ capture_cng_readiness() {
     # reader of the artifact alone could see a confident "FINDING HOLDS"
     # sitting next to a table row that is not actually DOWN.
     if [ "$after_obs" = "DOWN" ] && [ "$after_cng" = "200" ]; then
-      echo "FINDING HOLDS for $cng_image: CNG's own health endpoint cannot"
-      echo "report unhealthy, MEASURED against this exact image."
-      echo
-      echo "Proposed mechanism, NOT independently verified against the"
-      echo "$cng_image source: in couchbase/stellar-gateway, /ready and its"
-      echo "alias /health read one boolean; MarkSystemHealthy() is called"
-      echo "once at startup and MarkSystemUnhealthy() has zero callers on"
-      echo "master, v1.0 and v1.0.1 (the only tags that repo carries at the"
-      echo "time of writing). The stellar-gateway source matching the"
-      echo "$cng_image docker tag specifically was not inspected, and the"
-      echo "gRPC grpc.health.v1.Health/Check claim below is inferred from"
-      echo "those branches, not confirmed for this image:"
-      echo "the service is stamped SERVING at construction and never updated."
-      echo
-      echo "The documentation states the opposite: /ready 'returns HTTP 200"
-      echo "only when Cloud Native Gateway has connected to the Couchbase"
-      echo "cluster, and HTTP 503 otherwise'."
-      echo
-      echo "Consequence: a customer who configures /ready or /health as"
-      echo "their load balancer health check gets a check that can never"
-      echo "fail, even with the entire backend cluster gone. This is the"
-      echo "justification for Observer, and the basis for asking that CNG"
-      echo "consume Observer health probes directly."
+      echo "For $cng_image: /health did not detect this backend outage in this run."
+      echo "Baseline: Observer UP and /health 200. Backend outage: Observer DOWN and /health 200."
+      echo "This result covers only /health for this image and this recorded run."
     else
       echo "NO VERDICT for $cng_image: the finding requires the Observer to"
       echo "read DOWN and CNG to read 200 with the cluster gone; this run"
@@ -779,14 +750,8 @@ capture_cng_readiness() {
       if [ "$after_cng" != "200" ]; then
         echo
         echo "CNG's /health returned $after_cng, not 200, with the whole"
-        echo "region-a cluster gone against a verified healthy baseline"
-        echo "(observer UP, CNG 200 before the outage). The latch described"
-        echo "above (MarkSystemUnhealthy has zero callers) does not"
-        echo "reproduce on this image. Treat the design note's claim that"
-        echo "/ready and /health never go unhealthy as VOID for $cng_image:"
-        echo "it needs correcting, not repeating, and the stellar-gateway"
-        echo "source for the tag matching this image should be re-checked"
-        echo "before restating the claim for any other version."
+        echo "region-a cluster gone against verified healthy baseline."
+        echo "The /health 200 observation does not reproduce in this run."
       fi
       if [ "$after_obs" != "DOWN" ]; then
         echo
@@ -798,24 +763,42 @@ capture_cng_readiness() {
   } > "$OUT_DIR/cng-readiness-latch.txt"
   echo "wrote $OUT_DIR/cng-readiness-latch.txt"
 
-  recover_region_a
+  recover_region_a || return $?
+}
+
+cleanup() {
+  local status=$? workload_status=0
+  trap - EXIT
+  capture_artifacts
+  cleanup_harnesses || workload_status=$?
+  if [ "$status" -eq 0 ] && [ "$workload_status" -ne 0 ]; then status="$workload_status"; fi
+  if [ "${CLEANUP_STACK:-0}" -eq 1 ]; then stack_down; fi
+  exit "$status"
 }
 
 case "${1:-test}" in
   down) echo "== tearing down =="; stack_down; echo done; exit 0 ;;
-  up)   stack_up; echo "== stack up, host ports: envoy 18098, admin 19901, observers 8181/8182 =="; exit "$FAIL" ;;
+  up)   validate_output_dir; trap cleanup EXIT; stack_up; echo "== stack up, host ports: envoy 18098, admin 19901, observers 8181/8182 =="; exit "$FAIL" ;;
   scenario)
+    validate_output_dir
+    ensure_run
+    trap cleanup EXIT
     "scenario_${2:?scenario number required}"
     exit "$FAIL"
     ;;
   readiness)
+    validate_output_dir
+    ensure_run
+    trap cleanup EXIT
     # Task 12's evidence capture. Its own mode because it is not a numbered
     # scenario and must be runnable against an already-up stack.
     capture_cng_readiness
     exit "$FAIL"
     ;;
   test)
-    trap stack_down EXIT
+    validate_output_dir
+    CLEANUP_STACK=1
+    trap cleanup EXIT
     stack_up
     # stack_up's own baseline assertions (both Observers, both region markers,
     # both Envoy priorities) can fail without stopping the script, since
