@@ -9,8 +9,9 @@ def assert_owner(owner, actual):
     if not re.fullmatch(r'cng-demo(?:-[a-z0-9-]+)?', owner['name']):
         raise ValueError('invalid demo stack name')
 
-def assert_gateways(pods):
+def assert_gateways(pods, expected_removals=None):
     for pod in pods['items']:
+        if pod['metadata']['name'] in (expected_removals or set()):continue
         for c in pod.get('status', {}).get('containerStatuses', []):
             if c.get('restartCount', 0) or 'terminated' in c.get('state', {}):
                 raise ValueError('unexpected gateway termination/restart: '+pod['metadata']['name'])
@@ -56,6 +57,7 @@ class Kube:
     def get(self,kind,namespace=None,selector=None):
         args=['get',kind,'-o','json']
         if namespace:args+=['-n',namespace]
+        elif kind in ('pods','events','services','jobs','pvc'):args+=['-A']
         if selector:args+=['-l',selector]
         return json.loads(self.run(*args).stdout)
     def apply(self,obj):return self.run('apply','-f','-',input=json.dumps(obj))

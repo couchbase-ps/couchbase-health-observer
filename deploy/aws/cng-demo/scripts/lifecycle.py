@@ -8,8 +8,12 @@ CHART=ROOT/'deploy/aws/cng-demo/chart'
 TF=os.environ.get('TERRAFORM','terraform')
 
 def run(args, log=None, input=None, timeout=None, check=True):
-    p=subprocess.run([str(x) for x in args],input=input,text=True,capture_output=True,timeout=timeout)
-    if log: pathlib.Path(log).write_text(p.stdout+p.stderr)
+    if log:
+        with pathlib.Path(log).open('w') as stream:
+            p=subprocess.run([str(x) for x in args],input=input,text=True,stdout=stream,stderr=subprocess.STDOUT,timeout=timeout)
+        p.stdout='';p.stderr=''
+    else:
+        p=subprocess.run([str(x) for x in args],input=input,text=True,capture_output=True,timeout=timeout)
     if check and p.returncode: raise RuntimeError(str(args[0])+' failed; '+(str(log) if log else p.stderr.strip()))
     return p
 
@@ -44,7 +48,7 @@ class Demo:
         if self.owner.get('cluster_arn') and actual['arn']!=self.owner['cluster_arn']:
             raise ValueError('EKS ARN differs from owned deployment')
         run(['aws','eks','update-kubeconfig','--name',self.args.name,'--region',self.args.region,'--profile',self.args.profile,'--kubeconfig',self.kubeconfig,'--alias',self.args.name],log=self.state/'kubeconfig.log')
-    def provision(self, infra_only=False):
+    def provision(self, infra_only=False, plan_only=False):
         if not self.owner:
             check=run(['aws','eks','describe-cluster','--name',self.args.name,'--profile',self.args.profile,'--region',self.args.region],check=False)
             if check.returncode==0:raise ValueError('Existing cluster has no local ownership record; refusing adoption')
@@ -60,6 +64,9 @@ class Demo:
         changes=[c for c in plan.get('resource_changes',[]) if c['change']['actions']!=['no-op']]
         (self.state/'plan-summary.json').write_text(json.dumps([{'address':c['address'],'actions':c['change']['actions']} for c in changes],indent=2))
         if any('delete' in c['change']['actions'] for c in changes):raise ValueError('Up plan would delete/replace infrastructure; explicit reset or destroy required')
+        if plan_only:
+            print('Plan saved: '+str(self.state/'plan-summary.json'),flush=True)
+            return
         print('Applying owned EKS demo: primary2 / secondary1 / apps2, m7g.large',flush=True)
         self.tf('apply','-input=false',str(self.state/'apply.tfplan'),log=self.state/'apply.log')
         outputs=self.outputs();self.owner.update(cluster_arn=outputs['cluster_arn'],vpc_id=outputs['vpc_id']);self.save_owner()
@@ -209,7 +216,7 @@ class Demo:
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     actions=p.add_mutually_exclusive_group(required=True)
-    for action in ('up','infra-only','validate','reset','park','destroy','status'):actions.add_argument('--'+action,action='store_true')
+    for action in ('plan','up','infra-only','validate','reset','park','destroy','status'):actions.add_argument('--'+action,action='store_true')
     actions.add_argument('--scenario')
     p.add_argument('--profile',default=os.environ.get('AWS_PROFILE'))
     p.add_argument('--region',default='eu-west-1');p.add_argument('--name',default='cng-demo')
@@ -218,7 +225,7 @@ def main():
     if not args.profile:p.error('--profile or AWS_PROFILE required')
     if not __import__('re').fullmatch(r'cng-demo(?:-[a-z0-9-]+)?',args.name):p.error('invalid demo name')
     d=Demo(args)
-    if args.up or args.infra_only:d.provision(args.infra_only)
+    if args.plan or args.up or args.infra_only:d.provision(args.infra_only,args.plan)
     elif args.destroy:d.destroy()
     elif args.park:d.park()
     elif args.status:

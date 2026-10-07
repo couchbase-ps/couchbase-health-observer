@@ -31,7 +31,7 @@ class Architecture(unittest.TestCase):
         pvcs=self.objects('CouchbaseCluster')[0]['spec']['volumeClaimTemplates']
         self.assertEqual(pvcs[0]['spec']['storageClassName'],'cng-demo-gp3')
     def test_standalone_gateway_replicas_and_secrets(self):
-        gateways=[d for d in self.objects('Deployment') if d['metadata']['name'].startswith('cng-')]
+        gateways=[d for d in self.objects('Deployment') if any(c['image'].startswith('couchbase/cloud-native-gateway:') for c in d['spec']['template']['spec']['containers'])]
         self.assertEqual(len(gateways),2)
         for d in gateways:
             self.assertEqual(d['spec']['replicas'],2)

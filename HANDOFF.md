@@ -27,6 +27,20 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## AWS CNG Kubernetes driver (2026-10-07)
+
+Concreteplan inspected77creates/0delete,three ARMm7g.large pools2/1/2. Approved
+infra apply running. Runner ports s1-8/10 +readiness,same2sKV/5squery,90sclient
+handshake,terminal10s recovery,samegapbounds,exactGET/queryregion,negative realKV.
+Persistent5GiB output PVC;clients colocatewithtools(RWO),restartNever/backoff0;
+UID +restart +exit/OOM guards,capturepreviouslogs,nodeproxy stats +faulthealth.
+Scopeplannedtermination perexplicitvictim only; no toleratedunexpectedcrashes.
+Fleet2+2:direct real-operation probes eachgateway,thenEnvoy connectiondelta
+perprimaryendpoint +plannedonegatewayloss,no regionchange. Singleprofile retained.
+SQL/allocatable/systempod/metrics/TLS regressions green4; controlguards green7.
+WrongCA discriminator mustbe ssl certificateerror,notconnectionfailure. Setup
+credentials private,buildcontext excludesstate. Driver actualAWSproof pending.
+
 ## AWS CNG demo infrastructure +guards (2026-10-07)
 
 cb-fe added by user; STS auth +EKS1.35 standard-support lookup verified.
