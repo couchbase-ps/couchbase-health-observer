@@ -1,0 +1,125 @@
+{{ range $role := list "a" "b" }}
+{{ $ns := ternary $.Values.primaryNamespace $.Values.secondaryNamespace (eq $role "a") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cng-{{ $role }}
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  replicas: {{ $.Values.cngReplicas }}
+  selector:
+    matchLabels: {app: cng-{{ $role }}}
+  template:
+    metadata:
+      labels: {app: cng-{{ $role }}, demo.couchbase.com/stack: cng-demo}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        demo.couchbase.com/pool: apps
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels: {app: cng-{{ $role }}}
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: cng
+        image: {{ $.Values.cngImage | quote }}
+        args:
+        - --cb-host={{ index $.Values.bootstrapHosts $role }}
+        - --cb-user=$(CB_USER)
+        - --cb-pass=$(CB_PASS)
+        - --data-port=18098
+        - --web-port=9091
+        - --dapi-port=-1
+        - --cert=/certs/server.crt
+        - --key=/certs/server.key
+        - --daemon
+        - --log-level=info
+        env:
+        - name: CB_USER
+          valueFrom:
+            secretKeyRef: {name: cb-admin, key: username}
+        - name: CB_PASS
+          valueFrom:
+            secretKeyRef: {name: cb-admin, key: password}
+        ports:
+        - {name: grpc, containerPort: 18098}
+        - {name: http, containerPort: 9091}
+        readinessProbe:
+          tcpSocket: {port: grpc}
+          periodSeconds: 2
+        resources:
+          requests: {cpu: 100m, memory: 128Mi}
+          limits: {memory: 512Mi}
+        volumeMounts:
+        - {name: certs, mountPath: /certs, readOnly: true}
+      volumes:
+      - name: certs
+        secret: {secretName: cng-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cng-{{ $role }}
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  clusterIP: None
+  selector: {app: cng-{{ $role }}}
+  ports:
+  - {name: grpc, port: 18098, targetPort: grpc}
+  - {name: http, port: 9091, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observer-{{ $role }}
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: observer-{{ $role }}}
+  template:
+    metadata:
+      labels: {app: observer-{{ $role }}, demo.couchbase.com/stack: cng-demo}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {demo.couchbase.com/pool: apps}
+      containers:
+      - name: observer
+        image: {{ $.Values.observerImage | quote }}
+        args:
+        - --conn=couchbase://cb-{{ $role }}-srv.{{ $ns }}.svc.cluster.local
+        - --bucket=lbtest
+        - --user=$(CB_USER)
+        - --pass=$(CB_PASS)
+        - --critical=kv
+        - --addr=:8080
+        - --interval=2s
+        - --probe-timeout=1s
+        - --log-level=info
+        env:
+        - name: CB_USER
+          valueFrom:
+            secretKeyRef: {name: cb-admin, key: username}
+        - name: CB_PASS
+          valueFrom:
+            secretKeyRef: {name: cb-admin, key: password}
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe:
+          httpGet: {path: /readyz, port: http}
+          periodSeconds: 2
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: observer-{{ $role }}
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  selector: {app: observer-{{ $role }}}
+  ports: [{name: http, port: 8080, targetPort: http}]
+{{ end }}

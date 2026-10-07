@@ -1,0 +1,100 @@
+{{ if .Values.envoy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: envoy-config
+  labels: {demo.couchbase.com/stack: cng-demo}
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 9901}
+    static_resources:
+      listeners:
+      - name: cng_listener
+        address:
+          socket_address: {address: 0.0.0.0, port_value: 18098}
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: cng_tcp
+              cluster: cng_cluster
+              idle_timeout: 3600s
+      clusters:
+      - name: cng_cluster
+        type: STRICT_DNS
+        connect_timeout: 2s
+        dns_lookup_family: V4_ONLY
+        dns_refresh_rate: 1s
+        lb_policy: ROUND_ROBIN
+        close_connections_on_host_health_failure: true
+        common_lb_config:
+          healthy_panic_threshold: {value: 50}
+          zone_aware_lb_config: {fail_traffic_on_panic: true}
+        health_checks:
+        - timeout: 4s
+          interval: 5s
+          no_traffic_interval: 5s
+          unhealthy_threshold: 12
+          healthy_threshold: 2
+          http_health_check:
+            path: /health/couchbase
+            retriable_statuses: [{start: 503, end: 504}]
+        load_assignment:
+          cluster_name: cng_cluster
+          endpoints:
+          {{- range $role := list "a" "b" }}
+          - priority: {{ ternary 0 1 (eq $role "a") }}
+            lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address: {address: cng-{{ $role }}.{{ $.Release.Namespace }}.svc.cluster.local, port_value: 18098}
+                health_check_config:
+                  address:
+                    socket_address: {address: {{ required "observer Service addresses required when Envoy enabled" (index $.Values.observerAddresses $role) | quote }}, port_value: 8080}
+          {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: envoy
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: envoy}
+  template:
+    metadata:
+      labels: {app: envoy, demo.couchbase.com/stack: cng-demo}
+      annotations:
+        checksum/config: {{ printf "%s-%s" .Values.observerAddresses.a .Values.observerAddresses.b | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {demo.couchbase.com/pool: apps}
+      containers:
+      - name: envoy
+        image: envoyproxy/envoy:v1.31.10
+        args: [-c, /etc/envoy/envoy.yaml]
+        ports: [{name: grpc, containerPort: 18098}, {name: admin, containerPort: 9901}]
+        readinessProbe:
+          httpGet: {path: /ready, port: admin}
+          periodSeconds: 2
+        resources:
+          requests: {cpu: 100m, memory: 128Mi}
+          limits: {memory: 512Mi}
+        volumeMounts: [{name: config, mountPath: /etc/envoy, readOnly: true}]
+      volumes:
+      - name: config
+        configMap: {name: envoy-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  selector: {app: envoy}
+  ports: [{name: grpc, port: 18098, targetPort: grpc}, {name: admin, port: 9901, targetPort: admin}]
+{{ end }}

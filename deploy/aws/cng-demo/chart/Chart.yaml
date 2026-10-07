@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cng-aws-demo
+description: Isolated EKS CNG and Envoy failover demonstration
+version: 0.1.0
+appVersion: "1.2.1"
+type: application

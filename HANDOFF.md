@@ -27,6 +27,19 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## AWS CNG demo chart (2026-10-07)
+
+User approved five m7g.large workers(2primary/1secondary/2apps),two standalone
+CNG replicas percluster,EKS1.35,singleAWSregion. Branch feat/cng-aws-demo off5207ab8.
+Chart architecture regressions red(missingchart),green5; extra vendor-indexenum
+red(default unsupported by Operator),green(plasma). Full3KV+2IQ/1all topology,
+512Mi bucket,2Gi KVquota,30s autoFailover/max100,encrypted gp3 PVCs; CNG notsidecar,
+secret-env credentials,requiredper-fleet hostname separation,headless discovery,
+Observer health separate; Envoy STRICT_DNS retains4s/5s/12 +503 debounce/eviction.
+Offline chart assertions wired into test/helm/render.sh. Private .demo-aws ignored.
+No AWS resources created; profile choice pending(old cb-fe absent). Next infra,
+lifecycle guards,strictrestart/evidence +Kubernetes scenario driver,thenAWSproof.
+
 ## CNG quiet-host full validation (2026-10-06)
 
 Defaultclean d241a2d GREEN,driver0: setup +s1-8/10 +TLS +readiness. S9 deferred.

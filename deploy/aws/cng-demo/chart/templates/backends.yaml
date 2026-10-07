@@ -1,0 +1,112 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: cng-demo-gp3
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+{{ range $role := list "a" "b" }}
+{{ $ns := ternary $.Values.primaryNamespace $.Values.secondaryNamespace (eq $role "a") }}
+---
+apiVersion: couchbase.com/v2
+kind: CouchbaseBucket
+metadata:
+  name: lbtest
+  namespace: {{ $ns }}
+  labels:
+    demo.couchbase.com/stack: cng-demo
+spec:
+  name: lbtest
+  memoryQuota: 512Mi
+  replicas: {{ ternary 1 0 (eq $role "a") }}
+  storageBackend: couchstore
+---
+apiVersion: couchbase.com/v2
+kind: CouchbaseCluster
+metadata:
+  name: cb-{{ $role }}
+  namespace: {{ $ns }}
+  labels:
+    demo.couchbase.com/stack: cng-demo
+spec:
+  image: {{ $.Values.serverImage | quote }}
+  antiAffinity: false
+  security:
+    adminSecret: cb-admin
+  autoResourceAllocation:
+    enabled: true
+    cpuRequests: "0.25"
+    cpuLimits: "1"
+    overheadPercent: 25
+  buckets:
+    managed: true
+    selector:
+      matchLabels:
+        demo.couchbase.com/stack: cng-demo
+  cluster:
+    clusterName: cluster-{{ $role }}
+    dataServiceMemoryQuota: 2Gi
+    indexServiceMemoryQuota: 512Mi
+    queryServiceMemoryQuota: 1Gi
+    indexStorageSetting: plasma
+    autoFailoverTimeout: 30s
+    autoFailoverMaxCount: 100
+  networking:
+    exposeAdminConsole: true
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      storageClassName: cng-demo-gp3
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 20Gi
+  servers:
+  {{ if eq $role "a" }}
+  - name: data
+    size: 3
+    services: [data]
+    volumeMounts:
+      default: data
+    pod:
+      spec:
+        nodeSelector:
+          demo.couchbase.com/pool: primary
+        tolerations:
+        - key: demo-pool
+          value: primary
+          effect: NoSchedule
+  - name: query
+    size: 2
+    services: [index, query]
+    volumeMounts:
+      default: data
+    pod:
+      spec:
+        nodeSelector:
+          demo.couchbase.com/pool: primary
+        tolerations:
+        - key: demo-pool
+          value: primary
+          effect: NoSchedule
+  {{ else }}
+  - name: all
+    size: 1
+    services: [data, index, query]
+    volumeMounts:
+      default: data
+    pod:
+      spec:
+        nodeSelector:
+          demo.couchbase.com/pool: secondary
+        tolerations:
+        - key: demo-pool
+          value: secondary
+          effect: NoSchedule
+  {{ end }}
+{{ end }}

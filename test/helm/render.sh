@@ -149,3 +149,6 @@ hasnot "$DEFAULT" 'runAsGroup' "no fixed GID: OpenShift assigns one from the nam
 hasnot "$DEFAULT" 'fsGroup' "no fixed fsGroup: OpenShift assigns one from the namespace range"
 
 echo "PASS: chart lints and renders"
+
+# EKS CNG demo: separate chart, offline architecture contracts.
+"$ROOT/test/aws/cng-demo/render.sh"
