@@ -27,6 +27,19 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## AWS CNG demo infrastructure +guards (2026-10-07)
+
+cb-fe added by user; STS auth +EKS1.35 standard-support lookup verified.
+Terraform pinnedVPC6.6/EKS21.9: five m7g.large,private2AZ VPC,singleNAT,
+primary2/secondary1/apps2,isolatedbackend taints,encrypted30GiB roots,EBSCSI
+IRSA,privateimmutable ECR repos. Owneraccount/name/region guards preventadoption
+andcross-account teardown. Source/build context excludes private .demo-aws state.
+Terraform syntax/default contracts red(missinginfra),green2 after providerIPC
+allowed; five client/restart/UID/fleet/owner regressions red(missingcontrol),green.
+Lifecycle --infra-only supports phasedbootstrap; workload runner next. CNG
+standard Deployments canrestart,anyunexpectedrestart/UIDchange mustfailproof.
+No push/merge. AWS provisioning next under approved profile +sizing.
+
 ## AWS CNG demo chart (2026-10-07)
 
 User approved five m7g.large workers(2primary/1secondary/2apps),two standalone

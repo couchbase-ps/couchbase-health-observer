@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cng-demo-output
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: cng-demo-gp3
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cng-demo-tools
+  labels: {demo.couchbase.com/stack: cng-demo}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: cng-demo-tools}
+  template:
+    metadata:
+      labels: {app: cng-demo-tools, demo.couchbase.com/stack: cng-demo}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {demo.couchbase.com/pool: apps}
+      containers:
+      - name: tools
+        image: {{ .Values.serverImage | quote }}
+        command: [sleep, infinity]
+        env:
+        - name: CB_USER
+          valueFrom:
+            secretKeyRef: {name: cb-admin, key: username}
+        - name: CB_PASS
+          valueFrom:
+            secretKeyRef: {name: cb-admin, key: password}
+        readinessProbe:
+          exec: {command: [python3, -c, 'import pathlib; assert pathlib.Path("/out").is_dir()']}
+          periodSeconds: 2
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {memory: 512Mi}
+        volumeMounts: [{name: out, mountPath: /out}]
+      volumes:
+      - name: out
+        persistentVolumeClaim: {claimName: cng-demo-output}

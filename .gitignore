@@ -25,3 +25,6 @@ deploy/aws/lambda/bootstrap
 
 # Private AWS demo state, image values, kubeconfig, credentials and tooling
 /.demo-aws/
+
+# Python test/runtime caches
+__pycache__/

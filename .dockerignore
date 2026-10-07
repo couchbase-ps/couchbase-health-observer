@@ -1,0 +1,9 @@
+.git
+.demo-aws
+**/.terraform
+**/certs
+*.tfstate
+*.tfstate.*
+*.tfplan
+.env
+__pycache__
