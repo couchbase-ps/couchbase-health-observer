@@ -9,6 +9,10 @@ def assert_owner(owner, actual):
     if not re.fullmatch(r'cng-demo(?:-[a-z0-9-]+)?', owner['name']):
         raise ValueError('invalid demo stack name')
 
+def assert_eip_capacity(limit, allocated, existing_nat):
+    if not existing_nat and allocated>=limit:
+        raise ValueError('Elastic IP quota exhausted; new NAT gateway needs one free address')
+
 def assert_gateways(pods, expected_removals=None):
     for pod in pods['items']:
         if pod['metadata']['name'] in (expected_removals or set()):continue

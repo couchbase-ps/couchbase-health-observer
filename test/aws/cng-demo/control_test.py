@@ -11,6 +11,10 @@ class ControlContracts(unittest.TestCase):
             return type('Result',(),{'stdout':'{"items":[]}'})()
         kube.run=call;kube.get('pods');kube.get('nodes')
         self.assertIn('-A',calls[0]);self.assertNotIn('-A',calls[1])
+    def test_exhausted_elastic_ip_quota_blocks_cold_launch(self):
+        with self.assertRaises(ValueError):m.assert_eip_capacity(5,5,False)
+        m.assert_eip_capacity(5,4,False)
+        m.assert_eip_capacity(5,5,True)
     def test_owner_prevents_cross_account_and_stack(self):
         owner={'account':'111111111111','name':'cng-demo','region':'eu-west-1','profile':'sandbox'}
         m.assert_owner(owner,dict(owner))

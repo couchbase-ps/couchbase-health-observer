@@ -27,6 +27,22 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## AWS live provisioning BLOCKED (2026-10-07)
+
+Actualcb-fe apply failed: IrelandElasticIP quota5,all5 allocated. AllocateAddress
+CloudTrail Client.AddressLimitExceeded; ownedNAT nevercreated,private routes
+lackegress. Five ARMm7g.large EC2instances booted;nodeadm EC2DescribeInstances
++SSM HTTPS timeouts,zerojoinedworkers,EBSCSI degraded(unscheduled). No CNG/apps
+installed; no AWSscenario orresource-fit successclaimed. ExistingEIPs untouched.
+
+Quota preflight nowfailsbeforeTerraform mutatescoldstack(regressionred/green).
+Partialteardown does notrequireuninstalledworkloadcredentials(regressiongreen).
+Auto-review REJECTED actual --destroy: teardown approved ascapability,notexplicit
+executionnow. Do notbypass. Partial cng-demo resources remainbillable. NeedTayeb
+explicitcleanup approval +onefreeElasticIP(oraccountquota decision) beforeliveproof.
+Driver/control/architecture checks green; demo note +readonlycleanupplan next.
+No AWSquota changes,push,merge,orotherenvironment changes.
+
 ## AWS CNG startup +tool isolation (2026-10-07)
 
 ARM observer/harness Docker builds green; privatebuildcontext excluded. Bootstrap

@@ -4,7 +4,7 @@ ROOT=pathlib.Path(__file__).resolve().parents[3];sys.path.insert(0,str(ROOT/'dep
 import runner
 class RunnerContracts(unittest.TestCase):
     def test_query_transport_and_sql_errors_cannot_pass(self):
-        for response in [{'status':'errors','results':[1],'errors':[{'code':5000}]},{'results':[1]},{'status':'success','results':[0]}]:
+        for response in [{'status':'errors','results':[1],'errors':[{'code':5000}]},{'results':[1]},{'status':'success','results':[0]},{'status':'success','results':[True]}]:
             with self.assertRaises(ValueError):runner.query_success(response,expected=[1])
         runner.query_success({'status':'success','results':[1]},expected=[1])
     def test_capacity_uses_allocatable_and_includes_system_pods(self):

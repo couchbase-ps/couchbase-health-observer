@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Create, inspect, park and remove only this Terraform-owned AWS demo."""
 import argparse,base64,hashlib,ipaddress,json,os,pathlib,secrets,shutil,subprocess,sys,time,urllib.request
-from control import Kube,assert_owner
+from control import Kube,assert_owner,assert_eip_capacity
 ROOT=pathlib.Path(__file__).resolve().parents[4]
 INFRA=ROOT/'deploy/aws/cng-demo/infra'
 CHART=ROOT/'deploy/aws/cng-demo/chart'
@@ -57,6 +57,12 @@ class Demo:
             if 'ResourceNotFoundException' not in check.stderr:raise RuntimeError('Cannot establish that demo name is unused')
             self.owner=dict(self.identity,source_commit=run(['git','-C',ROOT,'rev-parse','HEAD']).stdout.strip(),created_at=int(time.time()))
             self.save_owner()
+        if not plan_only:
+            addresses=self.aws('ec2','describe-addresses')['Addresses']
+            quota=self.aws('service-quotas','get-service-quota','--service-code','ec2','--quota-code','L-0263D0A3')['Quota']['Value']
+            nat=self.aws('ec2','describe-nat-gateways','--filter','Name=tag:DemoId,Values='+self.args.name)['NatGateways']
+            existing=any(n['State']=='available' for n in nat)
+            assert_eip_capacity(quota,len(addresses),existing)
         address=urllib.request.urlopen('https://checkip.amazonaws.com',timeout=10).read().decode().strip()
         ipaddress.IPv4Address(address)
         self.tfvars.write_text(json.dumps({'name':self.args.name,'region':self.args.region,'admin_cidrs':[address+'/32']}))
@@ -191,18 +197,29 @@ class Demo:
         except RuntimeError as error:
             if 'ResourceNotFoundException' not in str(error):raise
         else:
-            from runner import Runner
-            r=Runner(self.state);r.capture('before-destroy');r.export_all()
-            self.kube.run('delete','jobs','-n','cng-demo','-l','demo.couchbase.com/stack=cng-demo','--ignore-not-found')
+            installed=(self.state/'credentials.json').exists() and (self.state/'image-values.json').exists()
+            namespaces={n['metadata']['name'] for n in self.kube.get('namespaces')['items']}
             volumes=[pv['spec']['csi']['volumeHandle'] for pv in self.kube.get('pv')['items'] if pv['spec'].get('claimRef',{}).get('namespace') in ('cb-a','cb-b','cng-demo') and 'csi' in pv['spec']]
             (self.state/'owned-volumes.json').write_text(json.dumps(volumes))
+            if installed:
+                from runner import Runner
+                r=Runner(self.state);r.capture('before-destroy')
+                if 'cng-demo' in namespaces:
+                    nodes=self.kube.get('nodes')['items']
+                    if not nodes:self.resize(True)
+                    self.kube.run('scale','deployment/cng-demo-tools','-n','cng-demo','--replicas=1')
+                    self.kube.run('rollout','status','deployment/cng-demo-tools','-n','cng-demo','--timeout=300s',timeout=330)
+                    r.export_all()
+                    self.kube.run('delete','jobs','-n','cng-demo','-l','demo.couchbase.com/stack=cng-demo','--ignore-not-found')
             for ns in ('cb-a','cb-b'):
-                self.kube.run('delete','couchbasecluster',ns,'-n',ns,'--ignore-not-found','--wait=true','--timeout=300s',timeout=330)
-            self.helm('uninstall','cng-demo','-n','cng-demo','--wait','--timeout','5m',log=self.state/'helm-uninstall.log')
-            for ns in ('cb-a','cb-b'):
-                self.kube.run('delete','pvc','--all','-n',ns,'--wait=true','--timeout=180s',timeout=210)
-                self.helm('uninstall','operator-'+ns,'-n',ns,'--wait','--timeout','5m',log=self.state/(ns+'-uninstall.log'))
-            for ns in ('cb-a','cb-b','cng-demo'):self.kube.run('delete','namespace',ns,'--ignore-not-found','--wait=true','--timeout=180s',timeout=210)
+                if ns in namespaces:
+                    self.kube.run('delete','couchbasecluster','cb-'+ns[-1],'-n',ns,'--ignore-not-found','--wait=true','--timeout=300s',timeout=330)
+            releases=json.loads(self.helm('list','--all-namespaces','-o','json').stdout)
+            for release in sorted(releases,key=lambda r:0 if r['name']=='cng-demo' else 1):
+                if release['namespace'] in ('cb-a','cb-b','cng-demo'):
+                    self.helm('uninstall',release['name'],'-n',release['namespace'],'--wait','--timeout','5m',log=self.state/(release['name']+'-uninstall.log'))
+            for ns in ('cb-a','cb-b','cng-demo'):
+                if ns in namespaces:self.kube.run('delete','namespace',ns,'--ignore-not-found','--wait=true','--timeout=180s',timeout=210)
             deadline=time.monotonic()+300
             while time.monotonic()<deadline:
                 remaining=[]

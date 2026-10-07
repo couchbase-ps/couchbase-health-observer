@@ -7,7 +7,7 @@ spec=importlib.util.spec_from_file_location('evidence',ROOT/'test/compose-cng/ev
 evidence=importlib.util.module_from_spec(spec);spec.loader.exec_module(evidence)
 
 def query_success(response,expected=None):
-    if response.get('status')!='success' or response.get('errors') or expected is not None and response.get('results')!=expected:
+    if response.get('status')!='success' or response.get('errors') or expected is not None and (response.get('results')!=expected or any(type(a) is not type(b) for a,b in zip(response.get('results',[]),expected))):
         raise ValueError('query did not return required successful result')
 
 def require_certificate_rejection(result):
