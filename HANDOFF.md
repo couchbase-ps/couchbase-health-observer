@@ -27,9 +27,23 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## AWS CNG demo closeout, blocked (2026-10-07)
+
+Script +chart +driver implemented; offline22contracts green(architecture6,
+control8,runner4,lifecycle-mocked2,Terraform2). Go unit/race/vet/build,
+existingcompose setup/evidence,Helm +pinnedmanifest no-drift,ARMbuilds green.
+Readonlycleanup plan72trackeddeletes includesEKS1,VPC1,nodegroups3,zeroexistingEIP.
+Plan notapplied; livecleanup auto-review rejected. No liveworkloadscenario or
+worker-fit/timing proof. Account needsonefreeEIP:5/5 used,AllocateAddress
+Client.AddressLimitExceeded. Partialcng-demo resources remainbillable pending
+explicitusercleanupapproval. No quota increase,reusedEIP,push,merge,Jira writes.
+PublicCLI README +matchingprivatevault demo note markexpected steps/unvalidated
+AWSstatus. Future:approvedcleanup +capacity,then --up,profiles1/2,park/resume,
+meetingrehearsal +authorizedcomplete destroy. No promisesofAWSreadiness.
+
 ## AWS live provisioning BLOCKED (2026-10-07)
 
-Actualcb-fe apply failed: IrelandElasticIP quota5,all5 allocated. AllocateAddress
+Actualapproved sandbox profile apply failed: IrelandElasticIP quota5,all5 allocated. AllocateAddress
 CloudTrail Client.AddressLimitExceeded; ownedNAT nevercreated,private routes
 lackegress. Five ARMm7g.large EC2instances booted;nodeadm EC2DescribeInstances
 +SSM HTTPS timeouts,zerojoinedworkers,EBSCSI degraded(unscheduled). No CNG/apps
@@ -38,7 +52,7 @@ installed; no AWSscenario orresource-fit successclaimed. ExistingEIPs untouched.
 Quota preflight nowfailsbeforeTerraform mutatescoldstack(regressionred/green).
 Partialteardown does notrequireuninstalledworkloadcredentials(regressiongreen).
 Auto-review REJECTED actual --destroy: teardown approved ascapability,notexplicit
-executionnow. Do notbypass. Partial cng-demo resources remainbillable. NeedTayeb
+executionnow. Do notbypass. Partial cng-demo resources remainbillable. Needuser
 explicitcleanup approval +onefreeElasticIP(oraccountquota decision) beforeliveproof.
 Driver/control/architecture checks green; demo note +readonlycleanupplan next.
 No AWSquota changes,push,merge,orotherenvironment changes.
@@ -70,7 +84,7 @@ credentials private,buildcontext excludesstate. Driver actualAWSproof pending.
 
 ## AWS CNG demo infrastructure +guards (2026-10-07)
 
-cb-fe added by user; STS auth +EKS1.35 standard-support lookup verified.
+approved sandbox profile added by user; STS auth +EKS1.35 standard-support lookup verified.
 Terraform pinnedVPC6.6/EKS21.9: five m7g.large,private2AZ VPC,singleNAT,
 primary2/secondary1/apps2,isolatedbackend taints,encrypted30GiB roots,EBSCSI
 IRSA,privateimmutable ECR repos. Owneraccount/name/region guards preventadoption
@@ -91,7 +105,7 @@ red(default unsupported by Operator),green(plasma). Full3KV+2IQ/1all topology,
 secret-env credentials,requiredper-fleet hostname separation,headless discovery,
 Observer health separate; Envoy STRICT_DNS retains4s/5s/12 +503 debounce/eviction.
 Offline chart assertions wired into test/helm/render.sh. Private .demo-aws ignored.
-No AWS resources created; profile choice pending(old cb-fe absent). Next infra,
+No AWS resources created; profile choice pending(old approved sandbox profile absent). Next infra,
 lifecycle guards,strictrestart/evidence +Kubernetes scenario driver,thenAWSproof.
 
 ## CNG quiet-host full validation (2026-10-06)

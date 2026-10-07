@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise lifecycle control flow with all cloud/process methods replaced by fakes."""
-import pathlib,sys,tempfile,types,unittest
+import pathlib,sys,tempfile,types,unittest,contextlib,io
 ROOT=pathlib.Path(__file__).resolve().parents[3];sys.path.insert(0,str(ROOT/'deploy/aws/cng-demo/scripts'))
 from lifecycle import Demo
 class Lifecycle(unittest.TestCase):
@@ -13,7 +13,7 @@ class Lifecycle(unittest.TestCase):
             d.helm=lambda *args,**kwargs:types.SimpleNamespace(stdout='[]')
             d.tf=lambda *args,**kwargs:calls.append(args)
             d.aws=lambda *args:{'ResourceTagMappingList':[]}
-            d.destroy()
+            with contextlib.redirect_stdout(io.StringIO()):d.destroy()
             self.assertIn('destroyed_at',d.owner)
             self.assertTrue(any(c[0]=='plan' and '-destroy' in c for c in calls))
             self.assertTrue(any(c[0]=='apply' for c in calls))

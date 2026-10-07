@@ -52,6 +52,18 @@ docs conflict; Java3.7.4 only SDK tested. See runbook primary-source links.
 Deferred: scenario9 DNS, kind/Operator, quorum aggregator, XDCR, production failback.
 Auto-failover: timeout30, maxCount100, quorum + replica checks discriminate loss.
 
+## AWS CNG demo
+
+Approvedscope: oneEKS1.35,singleAWSregion,2CBclusters(3KV+2IQ /1all),five
+m7g.large workers(primary2/secondary1/apps2),two standaloneCNG replicas percluster.
+CNG notOperator sidecar. CLI hack/cng-aws-demo.sh; publicrunbook deploy/aws/cng-demo/README.md.
+Native2sKV/5squery budgets retained; anyunexpectedCGWrestart/UIDchange failsproof,
+evenif anotherreplica servestraffic. Plannedvictims explicitlyscoped. Private
+state/credentials/evidence in .demo-aws,excludedfromGit +Dockercontext.
+AWSproof blocked20261007: IrelandEIP5/5,NAT allocationfailed; zerojoinedworkers.
+Do notclaimdemo-ready. Automaticapprovalreview blockedlivecleanup; needexplicit
+permission toexecute --destroy. Existingaddresses/otherenvironments untouched.
+
 ## Layout
 
 ```text
@@ -63,6 +75,8 @@ charts/couchbase-health-observer/  observer Helm chart. Single source of truth f
 hack/render-manifests.sh          regenerates deploy/k8s from the chart. deploy/k8s is GENERATED, never hand-edit. ci.yml `chart` job fails on drift.
 deploy/kind/          kind + official Couchbase Helm switch stack (mock-app in default, mock-app-b in app-b, webhook-receiver for scenario E). Observer itself installs from the chart with values-examples/kind.yaml.
 deploy/aws/           distributed-quorum AWS aggregation infra (Terraform): monitoring TG + quorum alarm + SNS
+deploy/aws/cng-demo/  EKS standalone-CNG demo: private Terraform, chart, lifecycle +fault runner; five m7g.large workers,2+2CNG,private .demo-aws state
+hack/cng-aws-demo.sh  --up/--validate/--scenario/--reset/--park/--destroy; quota +ownership guards
 deploy/compose-cng/   CNG load-balancer stack: 2 regions (cng-a 5 nodes replica 1, cng-b 1 node replica 0) on shared net cng-lb-net 172.28.0.0/16, standalone CNG 1.2.1 per region, Envoy L4 passthrough, shared-SAN certs
 harness/              Java SDK availability harness (couchbase2://), CSV + exact read/query region evidence
 test/<stack>/         per-stack tests, each independently runnable: test/compose, test/kind, test/aws, test/helm (chart lint+render, no cluster)
