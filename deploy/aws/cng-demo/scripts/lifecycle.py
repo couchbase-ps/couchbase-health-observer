@@ -26,6 +26,8 @@ class Demo:
         self.tfvars=self.state/'infra.auto.tfvars.json'
         os.environ['AWS_PROFILE']=args.profile;os.environ['AWS_REGION']=args.region
         os.environ['TF_DATA_DIR']=str(self.state/'tf-data')
+        for key,folder in [('HELM_CONFIG_HOME','helm-config'),('HELM_CACHE_HOME','helm-cache'),('HELM_DATA_HOME','helm-data')]:
+            os.environ[key]=str(ROOT/'.demo-aws/tools'/folder)
         self.account=self.aws('sts','get-caller-identity')['Account']
         self.identity={'account':self.account,'name':args.name,'region':args.region,'profile':args.profile}
         self.owner=json.loads(self.owner_path.read_text()) if self.owner_path.exists() else None
@@ -146,16 +148,19 @@ class Demo:
         self.helm('repo','update','couchbase-demo',log=self.state/'helm-repo-update.log')
         for ns in ('cb-a','cb-b'):
             self.helm('upgrade','--install','operator-'+ns,'couchbase-demo/couchbase-operator','--version','2.93.0','--namespace',ns,'--values',op_values,'--wait','--timeout','10m',log=self.state/(ns+'-operator.log'))
-        self.helm('upgrade','--install','cng-demo',CHART,'--namespace','cng-demo','--values',self.state/'image-values.json','--set','envoy.enabled=false',log=self.state/'workloads-bootstrap.log')
+        self.helm('upgrade','--install','cng-demo',CHART,'--namespace','cng-demo','--values',self.state/'image-values.json','--set','envoy.enabled=false','--set','gateways.enabled=false',log=self.state/'workloads-bootstrap.log')
         for ns in ('cb-a','cb-b'):
             self.kube.run('patch','couchbasecluster',ns,'-n',ns,'--type=merge','-p',json.dumps({'spec':{'paused':False,'hibernate':False}}))
             self.kube.run('wait','--for=condition=Available','couchbasecluster/'+ns,'-n',ns,'--timeout=1200s',timeout=1230)
         self.kube.run('rollout','status','deployment/cng-demo-tools','-n','cng-demo','--timeout=300s',timeout=330)
         from runner import Runner
         r=Runner(self.state);r.seed();r.assert_topology()
+        self.helm('upgrade','cng-demo',CHART,'--namespace','cng-demo','--values',self.state/'image-values.json','--set','envoy.enabled=false','--set','gateways.enabled=true',log=self.state/'gateways-start.log')
+        for d in ('cng-a','cng-b','observer-a','observer-b'):
+            self.kube.run('rollout','status','deployment/'+d,'-n','cng-demo','--timeout=300s',timeout=330)
         services=self.kube.get('services','cng-demo')['items']
         addresses={s['metadata']['name'][-1]:s['spec']['clusterIP'] for s in services if s['metadata']['name'].startswith('observer-')}
-        values=json.loads((self.state/'image-values.json').read_text());values['observerAddresses']=addresses;values['envoy']={'enabled':True}
+        values=json.loads((self.state/'image-values.json').read_text());values['observerAddresses']=addresses;values['envoy']={'enabled':True};values['gateways']={'enabled':True}
         (self.state/'runtime-values.json').write_text(json.dumps(values))
         self.helm('upgrade','cng-demo',CHART,'--namespace','cng-demo','--values',self.state/'runtime-values.json',log=self.state/'workloads.log')
         for d in ('cng-a','cng-b','observer-a','observer-b','envoy'):
@@ -176,6 +181,8 @@ class Demo:
             if all(not self.kube.get('pods',ns,'couchbase_cluster='+ns)['items'] for ns in ('cb-a','cb-b')):break
             time.sleep(5)
         else:raise TimeoutError('Backend hibernation did not finish; workers left running')
+        for d in ('cng-a','cng-b','observer-a','observer-b','envoy'):
+            self.kube.run('scale','deployment/'+d,'-n','cng-demo','--replicas=0')
         self.resize(False);print('Workers parked. EKS, NAT and storage still bill.',flush=True)
     def destroy(self):
         if not self.owner:raise ValueError('No owned Terraform state; refusing destroy')
@@ -224,6 +231,10 @@ def main():
     args=p.parse_args()
     if not args.profile:p.error('--profile or AWS_PROFILE required')
     if not __import__('re').fullmatch(r'cng-demo(?:-[a-z0-9-]+)?',args.name):p.error('invalid demo name')
+    global TF
+    from tools import ensure_tools
+    TF,kubectl=ensure_tools(ROOT,os.environ.get('TERRAFORM'))
+    os.environ['KUBECTL']=kubectl
     d=Demo(args)
     if args.plan or args.up or args.infra_only:d.provision(args.infra_only,args.plan)
     elif args.destroy:d.destroy()

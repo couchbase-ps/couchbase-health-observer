@@ -27,6 +27,17 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## AWS CNG startup +tool isolation (2026-10-07)
+
+ARM observer/harness Docker builds green; privatebuildcontext excluded. Bootstrap
+stages: databases/tools first(noCNG/Envoy),seed +exacttopology,thenCNG/Observers,
+thenEnvoy withactualObserverVIPs. Sixrendercontracts +lint green. Operator2.9.3
+chart2.93 pinned; helmcache private. Terraform/kubectl bootstrap checksumverified,
+kubectl1.35.8 replaces incompatibleclient33 onlyinprivatecache. Finalization
+capturesPod/logstate,stops onlycurrent-run writers,thenexportsstablepartialCSV.
+Diagnosticfailure cannotreplace originalfault orproducefalsegreen. EKS active;
+managedworkers creating,actualworkloadproof stillpending. No push/merge.
+
 ## AWS CNG Kubernetes driver (2026-10-07)
 
 Concreteplan inspected77creates/0delete,three ARMm7g.large pools2/1/2. Approved

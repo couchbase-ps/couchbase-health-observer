@@ -4,6 +4,8 @@ cngImage: couchbase/cloud-native-gateway:1.2.1@sha256:a97b198fa7ba7bdfd3cf0251ea
 observerImage: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.0
 harnessImage: example.com/harness:build-required
 cngReplicas: 2
+gateways:
+  enabled: true
 primaryNamespace: cb-a
 secondaryNamespace: cb-b
 bootstrapHosts:

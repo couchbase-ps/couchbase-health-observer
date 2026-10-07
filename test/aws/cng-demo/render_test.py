@@ -14,6 +14,12 @@ class Architecture(unittest.TestCase):
             capture_output=True,text=True,check=True)
         cls.docs = [d for d in yaml.safe_load_all(p.stdout) if d]
     def objects(self, kind): return [x for x in self.docs if x['kind']==kind]
+    def test_initial_database_stage_has_no_gateways_or_envoy(self):
+        p=subprocess.run(['helm','template','cng-demo',str(CHART),'-n','cng-demo','--set','gateways.enabled=false','--set','envoy.enabled=false'],capture_output=True,text=True,check=True)
+        docs=[d for d in yaml.safe_load_all(p.stdout) if d]
+        containers=[c['name'] for d in docs if d['kind']=='Deployment' for c in d['spec']['template']['spec']['containers']]
+        self.assertNotIn('cng',containers);self.assertNotIn('envoy',containers)
+        self.assertIn('tools',containers)
     def test_full_backend_topology_and_storage(self):
         clusters=self.objects('CouchbaseCluster');self.assertEqual(len(clusters),2)
         a,b=sorted(clusters,key=lambda x:x['metadata']['name'])

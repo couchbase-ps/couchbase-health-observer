@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Lifecycle and workload contracts shared by AWS orchestration and validation."""
-import json, pathlib, re, subprocess
+import json, pathlib, re, subprocess, os
 
 def assert_owner(owner, actual):
     for key in ('account', 'name', 'region'):
@@ -48,7 +48,7 @@ def harness_job(name, seconds, run_id, image, startup=True, region='a', extra=No
 
 class Kube:
     def __init__(self, kubeconfig):
-        self.prefix=['kubectl','--kubeconfig',str(kubeconfig),'--request-timeout=30s']
+        self.prefix=[os.environ.get('KUBECTL','kubectl'),'--kubeconfig',str(kubeconfig),'--request-timeout=30s']
     def run(self,*args,input=None,check=True,timeout=60):
         p=subprocess.run(self.prefix+list(args),input=input,text=True,capture_output=True,timeout=timeout)
         if check and p.returncode:

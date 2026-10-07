@@ -1,3 +1,4 @@
+{{ if .Values.gateways.enabled }}
 {{ range $role := list "a" "b" }}
 {{ $ns := ternary $.Values.primaryNamespace $.Values.secondaryNamespace (eq $role "a") }}
 ---
@@ -122,4 +123,6 @@ metadata:
 spec:
   selector: {app: observer-{{ $role }}}
   ports: [{name: http, port: 8080, targetPort: http}]
+{{ end }}
+
 {{ end }}

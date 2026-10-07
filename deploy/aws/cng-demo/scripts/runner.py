@@ -125,7 +125,10 @@ except Exception as e:print(json.dumps({'code':0,'error':str(e)}))
             for kind in ('pods','events','services'):
                 try:(dest/(ns+'-'+kind+'.json')).write_text(json.dumps(self.kube.get(kind,ns),indent=2))
                 except Exception as e:(dest/(ns+'-'+kind+'.error')).write_text(str(e))
-            for p in self.kube.get('pods',ns)['items']:
+            try:pods=self.kube.get('pods',ns)['items']
+            except Exception as e:
+                (dest/(ns+'-logs.error')).write_text(str(e));pods=[]
+            for p in pods:
                 for previous in (False,True):
                     args=['logs',p['metadata']['name'],'-n',ns,'--all-containers=true','--timestamps=true']
                     if previous:args+=['--previous']
@@ -416,13 +419,35 @@ except Exception as e:print(json.dumps({'transport_error':str(e)}))
             for number in ('1','2','3','4','5','6','7','10','8','readiness'):
                 self.run_scenario(number)
             if replicas==2:self.run_scenario('gateway')
-            self.assert_no_crash();code=0;print('ALL AWS SCENARIOS PASSED: '+profile,flush=True)
+            self.assert_no_crash();code=0
         finally:
-            self.stop_monitor();self.capture('final');self.export_all();(self.out/'driver.exit-code').write_text(str(code)+'\n')
+            self.finalize(code)
+        print('ALL AWS SCENARIOS PASSED: '+profile,flush=True)
     def scenario(self,number):
         self.out=self.state/'evidence'/(self.run_id+'-scenario-'+number);self.out.mkdir(parents=True)
         self.wait_baseline();self.assert_topology();self.start_monitor();code=1
         try:
             self.run_scenario(number);code=0
         finally:
-            self.stop_monitor();self.capture('final');self.export_all();(self.out/'driver.exit-code').write_text(str(code)+'\n')
+            self.finalize(code)
+
+    def finalize(self,code):
+        errors=[];self.stop_monitor()
+        try:self.capture('final')
+        except Exception as e:errors.append(str(e))
+        # Preserve Pod/log state first, then stop only this run's writers.
+        try:self.kube.run('delete','jobs','-n','cng-demo','-l','demo.couchbase.com/run='+self.run_id,'--ignore-not-found','--wait=true')
+        except Exception as e:errors.append(str(e))
+        for name in self.before_clients:
+            for suffix in ('.csv','.startup.csv','.startup.json','.ready.json'):
+                try:(self.out/(name+suffix)).write_text(self.read_file(name+suffix))
+                except Exception:pass
+            if code and (self.out/(name+'.csv')).exists():
+                try:(self.out/(name+'.partial.summary.json')).write_text(json.dumps(evidence.measure(self.out/(name+'.csv'),self.faults.get(name)),indent=2))
+                except ValueError as e:(self.out/(name+'.partial.error')).write_text(str(e))
+        try:self.export_all()
+        except Exception as e:errors.append(str(e))
+        (self.out/'diagnostic-errors.json').write_text(json.dumps(errors))
+        final_code=1 if errors else code
+        (self.out/'driver.exit-code').write_text(str(final_code)+'\n')
+        if errors and code==0:raise ValueError('scenario assertions passed but required evidence capture failed')
