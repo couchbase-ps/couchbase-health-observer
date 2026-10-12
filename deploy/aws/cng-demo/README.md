@@ -2,11 +2,11 @@
 
 This demo places applications, Envoy and standalone CNG pods on EKS. The Operator manages two separate Couchbase clusters. All resources use one AWS region. Database pods represent the VM backends for this demonstration. This is not a production HA design.
 
-## Current result, 2026-10-07
+## Current result, 2026-10-12
 
 Offline checks and ARM image builds passed. AWS provisioning failed before workload installation. Ireland had five allocated Elastic IP addresses and a quota of five. The NAT gateway could not obtain an address. Worker bootstrap then timed out when it contacted AWS APIs. No worker joined EKS. No CNG scenario ran on AWS. The proposed small-worker resource fit is not yet measured.
 
-A quota check now stops a cold launch before Terraform creates billable resources when no address is available. Existing addresses and other environments are not changed. The partial deployment remains because automatic approval review rejected execution of cleanup without explicit permission. Do not treat this demo as ready until live validation completes.
+A quota check now stops a cold launch before Terraform creates billable resources when no address is available. Existing addresses and other environments are not changed. The partial deployment was deleted on 2026-10-12 after explicit authorization. Terraform removed 72 tracked resources. Live checks confirmed that the EKS cluster, VPC, worker instances, volumes and network interfaces were absent. All five existing Elastic IP allocations remained. The disabled encryption key is scheduled for deletion on 2026-11-11, after the AWS deletion window. Private state and cleanup evidence remain locally. Do not treat this demo as ready until live validation completes.
 
 ## Topology
 

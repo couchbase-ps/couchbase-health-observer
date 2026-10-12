@@ -27,6 +27,19 @@ arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on r
 namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
 merge, tag v0.5.1 (Tayeb).
 
+## AWS CNG demo cleanup complete (2026-10-12)
+
+User explicitly authorized partial environment deletion; refreshed SSO account
+matched retained ownership. Refreshed destroy-only plan: 72 deletes reviewed.
+Owned tags matched; no EIP deletions, demo namespaces or PVs before apply.
+Terraform: 72 destroyed. Live checks: EKS/VPC absent, zero active instances,
+EKS-tagged volumes or ENIs, zero Terraform managed instances. Five original
+EIP allocations retained. KMS PendingDeletion, scheduled 2026-11-11; disabled,
+configured 30-day window. Stale default SG tag entry verified absent by EC2.
+Private .demo-aws state, plan, logs +cleanup-verification.json retained.
+Prior cleanup approval block resolved. AWS workload readiness still unproved.
+No quota change, push, merge or other environment deletion.
+
 ## AWS CNG demo closeout, blocked (2026-10-07)
 
 Script +chart +driver implemented; offline22contracts green(architecture6,
