@@ -14,10 +14,10 @@ metadata:
   name: observer
   namespace: default
   labels:
-    helm.sh/chart: couchbase-health-observer-0.5.0
+    helm.sh/chart: couchbase-health-observer-0.5.1
     app.kubernetes.io/name: couchbase-health-observer
     app.kubernetes.io/instance: observer
-    app.kubernetes.io/version: "0.5.0"
+    app.kubernetes.io/version: "0.5.1"
 ---
 # Source: couchbase-health-observer/templates/secret.yaml
 apiVersion: v1
@@ -26,10 +26,10 @@ metadata:
   name: observer-credentials
   namespace: default
   labels:
-    helm.sh/chart: couchbase-health-observer-0.5.0
+    helm.sh/chart: couchbase-health-observer-0.5.1
     app.kubernetes.io/name: couchbase-health-observer
     app.kubernetes.io/instance: observer
-    app.kubernetes.io/version: "0.5.0"
+    app.kubernetes.io/version: "0.5.1"
 type: Opaque
 stringData:
   username: "Administrator"
@@ -44,10 +44,10 @@ kind: ClusterRole
 metadata:
   name: observer
   labels:
-    helm.sh/chart: couchbase-health-observer-0.5.0
+    helm.sh/chart: couchbase-health-observer-0.5.1
     app.kubernetes.io/name: couchbase-health-observer
     app.kubernetes.io/instance: observer
-    app.kubernetes.io/version: "0.5.0"
+    app.kubernetes.io/version: "0.5.1"
 rules:
   - apiGroups:
       - ""
@@ -71,10 +71,10 @@ metadata:
   name: observer
   namespace: default
   labels:
-    helm.sh/chart: couchbase-health-observer-0.5.0
+    helm.sh/chart: couchbase-health-observer-0.5.1
     app.kubernetes.io/name: couchbase-health-observer
     app.kubernetes.io/instance: observer
-    app.kubernetes.io/version: "0.5.0"
+    app.kubernetes.io/version: "0.5.1"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -91,10 +91,10 @@ metadata:
   name: observer
   namespace: default
   labels:
-    helm.sh/chart: couchbase-health-observer-0.5.0
+    helm.sh/chart: couchbase-health-observer-0.5.1
     app.kubernetes.io/name: couchbase-health-observer
     app.kubernetes.io/instance: observer
-    app.kubernetes.io/version: "0.5.0"
+    app.kubernetes.io/version: "0.5.1"
   annotations:
     prometheus.io/path: /metrics
     prometheus.io/port: "8080"
@@ -116,10 +116,10 @@ metadata:
   name: observer
   namespace: default
   labels:
-    helm.sh/chart: couchbase-health-observer-0.5.0
+    helm.sh/chart: couchbase-health-observer-0.5.1
     app.kubernetes.io/name: couchbase-health-observer
     app.kubernetes.io/instance: observer
-    app.kubernetes.io/version: "0.5.0"
+    app.kubernetes.io/version: "0.5.1"
 spec:
   # Single active detector. See docs/DEPLOYMENT.md "SPOF & HA" for mitigations.
   replicas: 1
@@ -144,7 +144,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: observer
-          image: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.0
+          image: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.1
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

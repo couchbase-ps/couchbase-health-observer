@@ -18,7 +18,7 @@ DEFAULT="$(helm template observer "$CHART" --namespace default)"
 has "$DEFAULT" 'kind: Deployment'
 has "$DEFAULT" 'kind: Service'
 has "$DEFAULT" 'kind: ServiceAccount'
-has "$DEFAULT" 'image: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.0' "image tag must fall back to appVersion"
+has "$DEFAULT" 'image: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.1' "image tag must fall back to appVersion"
 hasnot "$DEFAULT" ':latest' "never ship the latest tag"
 has "$DEFAULT" '--actuators=k8s'
 has "$DEFAULT" 'path: /healthz'

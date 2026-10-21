@@ -21,7 +21,7 @@ From the OCI registry:
 
 ```bash
 helm install observer oci://ghcr.io/couchbase-ps/charts/couchbase-health-observer \
-  --version 0.5.0 \
+  --version 0.5.1 \
   --namespace observer --create-namespace \
   --values my-values.yaml
 ```
@@ -30,7 +30,7 @@ From a packaged archive, for a pipeline that cannot pull OCI charts. Download
 `couchbase-health-observer-<version>.tgz` from the GitHub release, then:
 
 ```bash
-helm install observer ./couchbase-health-observer-0.5.0.tgz \
+helm install observer ./couchbase-health-observer-0.5.1.tgz \
   --namespace observer --create-namespace \
   --values my-values.yaml
 ```
