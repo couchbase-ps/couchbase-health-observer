@@ -138,4 +138,14 @@ done
 has "$MON" 'up{job="cb-observer"} == 0'
 has "$MON" 'port: http'
 
+# Step 7: restricted security context (PSA restricted, OpenShift restricted-v2).
+has "$DEFAULT" 'runAsNonRoot: true'
+has "$DEFAULT" 'type: RuntimeDefault' "seccompProfile must be RuntimeDefault"
+has "$DEFAULT" 'allowPrivilegeEscalation: false'
+grep -A2 'capabilities:' <<<"$DEFAULT" | grep -q -- '- ALL' || fail "capabilities must drop ALL"
+has "$DEFAULT" 'readOnlyRootFilesystem: true'
+hasnot "$DEFAULT" 'runAsUser' "no fixed UID: OpenShift assigns one from the namespace range"
+hasnot "$DEFAULT" 'runAsGroup' "no fixed GID: OpenShift assigns one from the namespace range"
+hasnot "$DEFAULT" 'fsGroup' "no fixed fsGroup: OpenShift assigns one from the namespace range"
+
 echo "PASS: chart lints and renders"

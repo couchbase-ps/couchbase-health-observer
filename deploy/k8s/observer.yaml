@@ -138,10 +138,20 @@ spec:
         prometheus.io/scrape: "true"
     spec:
       serviceAccountName: observer
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: observer
           image: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.0
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
           args:
             - --actuators=k8s
             - --conn=couchbase://region-a-srv.region-a.svc
