@@ -2,6 +2,21 @@
 
 Running progress so any agent (or human) can continue. Newest entry on top. Update after each step.
 
+## Non-root + restricted security context, OpenShift prep (2026-10-21, v0.5.1 candidate)
+
+Branch `harden/nonroot-openshift`. Image final stage `distroless/static-debian12:nonroot`
+(UID 65532). Chart defaults: pod `runAsNonRoot` + `seccompProfile: RuntimeDefault`;
+container `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
+`readOnlyRootFilesystem: true`. NO `runAsUser`/`runAsGroup`/`fsGroup`: OpenShift
+`restricted-v2` assigns UID from namespace range (render.sh asserts absence). Goal:
+PSA `restricted` + `restricted-v2` with no extra SCC. Chart + appVersion 0.5.1, not
+tagged. Docs fixed to match code: `DEGRADED` exists (criticals UP, non-critical DOWN,
+HTTP 200, healthy for state machine), `reachable` = int count + `reason` field, cold
+start = ConfigMap adopt (`adopt_switched`/`adopt_mixed`), not old armed gate.
+`hack/render-manifests.sh` needs helm v4.1.4 (CI pin): v4.2.x adds blank lines = fake drift.
+Next: kind regression A-E + PSA restricted label, then OpenShift Local (CRC) validation,
+then `docs/DEPLOYMENT.md` OpenShift section.
+
 ## Health follows ACTIVE cluster after switch (2026-08-26, #38)
 
 Regression fix, rebased on webhook #31 + multi-ns #32. Post-switch/post-adopt
