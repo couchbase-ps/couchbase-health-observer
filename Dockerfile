@@ -8,7 +8,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /svchealthcheck ./cmd/svchealthcheck
 
-FROM gcr.io/distroless/static-debian12
+# nonroot = UID 65532. The chart sets runAsNonRoot, which needs a numeric non-zero user.
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /svchealthcheck /svchealthcheck
 EXPOSE 8080
 ENTRYPOINT ["/svchealthcheck"]
