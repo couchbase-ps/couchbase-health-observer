@@ -135,8 +135,18 @@ extraArgs: []
 
 podAnnotations: {}
 podLabels: {}
-podSecurityContext: {}
-securityContext: {}
+# Restricted defaults: pass Pod Security Admission "restricted" and the OpenShift
+# restricted-v2 SCC. No runAsUser, runAsGroup or fsGroup: OpenShift assigns a UID
+# from the namespace range, elsewhere the image user (65532, distroless nonroot) runs.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
 nodeSelector: {}
 tolerations: []
 affinity: {}
