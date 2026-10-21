@@ -14,8 +14,18 @@ tagged. Docs fixed to match code: `DEGRADED` exists (criticals UP, non-critical 
 HTTP 200, healthy for state machine), `reachable` = int count + `reason` field, cold
 start = ConfigMap adopt (`adopt_switched`/`adopt_mixed`), not old armed gate.
 `hack/render-manifests.sh` needs helm v4.1.4 (CI pin): v4.2.x adds blank lines = fake drift.
-Next: kind regression A-E + PSA restricted label, then OpenShift Local (CRC) validation,
-then `docs/DEPLOYMENT.md` OpenShift section.
+Regression: CI on branch HEAD all green (kind A-E, switch-lambda, compose, TLS); local
+compose/TLS/lambda green; PSA `restricted` ns admits pod, process UID 65532, no
+read-only errors. Local kind A-E can NOT run on macOS kind: pods get `nofile`
+~1073741816, Erlang `beam.smp` then ~2.2 GB RSS each (vs ~150 MB at 1048576), Couchbase
+pods OOMKilled before observer installs. Environmental, CI unaffected.
+OpenShift Local (CRC 2.64.0, OCP 4.22.14, arm64): chart under `restricted-v2`, no extra
+SCC, injected UID; endpoints, RBAC, dry-run, full-outage switch (~34 s switch, ~39 s apps
+Ready, failoverDelay 30s), restart adopt, manual failback all pass. Monitoring objects
+install, scrape not exercised (CRC monitoring off). Couchbase operator not in CRC
+arm64 catalog: test clusters via `deploy/kind/couchbase-cluster` + `anyuid` on region
+namespaces only. Details: `docs/DEPLOYMENT.md` OpenShift section. Next: review, rebase
+merge, tag v0.5.1 (Tayeb).
 
 ## Health follows ACTIVE cluster after switch (2026-08-26, #38)
 

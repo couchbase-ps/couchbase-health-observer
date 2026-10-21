@@ -127,6 +127,44 @@ Note: `observer_secondary_up` is set only when a switch is pending (sustained ou
 so it reads `0` until the first switch attempt — read it alongside `observer_couchbase_up`
 (the `ObserverSwitchHeldSecondaryDown` alert already gates on both).
 
+## OpenShift
+
+Validated with chart 0.5.1 on OpenShift Local (CRC 2.64.0, OpenShift 4.22.14,
+Kubernetes 1.35, arm64), two application namespaces, `actuators: k8s`.
+
+- **SCC: `restricted-v2`, nothing extra.** Do not grant `anyuid` or any other SCC to the
+  observer service account. The chart sets `runAsNonRoot`, `seccompProfile:
+  RuntimeDefault`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]` and
+  `readOnlyRootFilesystem: true`, and leaves `runAsUser`, `runAsGroup` and `fsGroup`
+  unset. OpenShift injects a UID from the namespace range (for example `1000670000`) and
+  the observer runs as that UID. The same defaults pass Pod Security Admission
+  `restricted` on plain Kubernetes, where the image user (UID 65532) applies.
+- **Install** is the normal Helm command. RBAC renders as on any cluster: one
+  `ClusterRole` and one `RoleBinding` per target namespace, no `ClusterRoleBinding`.
+- **No Route.** The Service is cluster-internal. Use `oc port-forward svc/<release> 8080`
+  to read `/health/couchbase` by hand.
+- **Monitoring.** The ServiceMonitor and PrometheusRule (`monitoring.serviceMonitor`,
+  `monitoring.prometheusRule`) need user-workload monitoring
+  (`enableUserWorkload: true` in the `cluster-monitoring-config` ConfigMap of
+  `openshift-monitoring`). The CRDs ship with OpenShift, so the objects install even
+  without it, but nothing scrapes them. On CRC the monitoring stack is off by default:
+  the objects were created and accepted, the scrape and the alerts were not exercised.
+- **Image.** Pull from `ghcr.io` as usual, or mirror the image into the internal
+  registry. A binary Docker build (`oc new-build --binary --strategy=docker`) of the
+  repository builds the same image inside the cluster.
+
+Checks passed on CRC: chart install, pod admitted under `restricted-v2` with an injected
+UID, `/healthz` `/readyz` `/health/couchbase` `/metrics`, `--dry-run` switch that patched
+nothing, full primary outage switch (both ConfigMaps patched, both Deployments rolled,
+apps on the secondary about 39 s after the outage with `failoverDelay: 30s`), restart
+adoption with no second roll (`adopt_switched`), and manual failback as in
+[RUNBOOK-failover-failback.md](RUNBOOK-failover-failback.md).
+
+The test Couchbase clusters used the Docker Hub `couchbase/server` image through the
+Couchbase Helm chart, which runs as UID 1000. They needed the `anyuid` SCC in their own
+namespaces. This is a test-harness concern, not an observer requirement. A production
+cluster on OpenShift uses the certified Couchbase operator and images.
+
 ## SPOF & HA
 
 The centralized model runs **one** active detector — a single point of failure.
