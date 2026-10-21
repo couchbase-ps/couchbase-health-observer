@@ -43,15 +43,15 @@ flowchart TD
   or DEGRADED, HTTP 503 when DOWN. `GET /healthz` is a static liveness probe.
 
 Example body (`reachable` is a count of reachable endpoints, `unreachable` lists the
-hosts with a failing endpoint):
+hosts with a failing endpoint, `null` when none):
 
 ```json
 {
   "status": "UP",
   "critical": ["kv"],
   "services": {
-    "kv":    {"status": "UP", "reachable": 1, "unreachable": []},
-    "query": {"status": "UP", "reachable": 1, "unreachable": []}
+    "kv":    {"status": "UP", "reachable": 1, "unreachable": null},
+    "query": {"status": "UP", "reachable": 1, "unreachable": null}
   },
   "reason": "all critical services reachable",
   "checkedAt": "2026-06-22T12:00:00Z"
