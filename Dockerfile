@@ -1,6 +1,6 @@
 # Multi-arch build. Compile on the build platform but cross-compile the Go binary for the
 # target platform (TARGETARCH), so buildx produces amd64 + arm64 images without emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
