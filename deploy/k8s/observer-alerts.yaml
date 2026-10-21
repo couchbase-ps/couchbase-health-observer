@@ -16,10 +16,10 @@ metadata:
   name: observer
   namespace: default
   labels:
-    helm.sh/chart: couchbase-health-observer-0.5.0
+    helm.sh/chart: couchbase-health-observer-0.5.1
     app.kubernetes.io/name: couchbase-health-observer
     app.kubernetes.io/instance: observer
-    app.kubernetes.io/version: "0.5.0"
+    app.kubernetes.io/version: "0.5.1"
     role: alert-rules
 spec:
   groups:
