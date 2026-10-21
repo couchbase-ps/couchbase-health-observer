@@ -133,8 +133,9 @@ The centralized model runs **one** active detector — a single point of failure
 Mitigations, cheapest first:
 1. **Dead-man alert** (`ObserverAbsent`) — you are paged if the observer disappears
    (shipped in `observer-alerts.yaml`).
-2. **Fast reschedule** — a Deployment reschedules the pod on node loss; the
-   cold-start guard prevents a mid-outage restart from auto-switching.
+2. **Fast reschedule** — a Deployment reschedules the pod on node loss; at boot the
+   observer adopts an already-switched ConfigMap (`adopt_switched`), so a restart after
+   a switch does not switch or roll again.
 3. **Leader-election active-passive HA** (future) — N replicas, only the leader
    actuates. Removes the SPOF in this model. Deferred.
 4. **AWS distributed-quorum path** — a fleet of observers behind an ALB target group

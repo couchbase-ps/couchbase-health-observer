@@ -19,9 +19,9 @@ Two actuators, picked by `--actuators` (`k8s`, `webhook`, `k8s,webhook`; empty =
 ## Health model (SDK path)
 
 - Service **DOWN if any endpoint unreachable**, **UP** only if all reachable. After auto-failover a node vanishes from cluster map, so ping reads UP (cluster absorbed it).
-- **Global** = `DOWN if any critical service DOWN, else UP`. `critical` is per-app config (e.g. `["kv"]` or `["kv","query"]`). Non-critical services still appear in JSON for observability.
-- No `DEGRADED` in SDK path (SDK cannot see failover state). "Don't react to transient blips" lives in the **consumer** (a delay / `FailoverDelay`), not in the health snapshot.
-- Endpoint `/health/couchbase` returns detailed JSON report; HTTP 503 when global DOWN, else 200.
+- **Global** = `DOWN` if any critical service DOWN (or unobserved), `DEGRADED` if criticals UP but non-critical DOWN, else `UP`. `critical` is per-app config (e.g. `["kv"]` or `["kv","query"]`). Non-critical services still appear in JSON for observability.
+- `DEGRADED` = healthy for state machine (resets DOWN timer). SDK cannot see failover state: "don't react to transient blips" lives in **consumer** (`FailoverDelay`), not in snapshot.
+- Endpoint `/health/couchbase` returns detailed JSON report (`reachable` = count, `unreachable` = hosts, `reason`, shape in `pkg/svchealth/types.go`); HTTP 503 when global DOWN, else 200.
 
 ## Layout
 

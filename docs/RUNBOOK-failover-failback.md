@@ -4,8 +4,9 @@
 1. The observer pings the primary each `--interval`; a critical service (e.g. `kv`)
    becomes unreachable -> global status `DOWN`.
 2. The state machine requires `DOWN` sustained past `--failover-delay` (transient or
-   auto-failover-absorbed losses do NOT switch). It also requires the cluster to have
-   been seen healthy at least once (cold-start guard).
+   auto-failover-absorbed losses do NOT switch). A restarted observer reads the
+   target ConfigMaps at boot: if they already hold the secondary, it adopts that state
+   (log `adopt_switched`) and does not switch or roll again.
 3. Secondary guard: before switching, the observer probes the secondary. If it is not
    ready, the switch is held (metric `observer_secondary_up=0`, log
    `switch held: secondary not ready`) and retried next tick.

@@ -32,24 +32,28 @@ flowchart TD
 - A service is **DOWN** if any of its endpoints is unreachable, **UP** only if all are
   reachable. After a Couchbase auto-failover the failed node leaves the cluster map, so
   `ping` reads UP again (the cluster has absorbed the loss).
-- The **global** status is `DOWN if any critical service is DOWN, else UP`. `critical`
-  is per-app config (e.g. `kv`, or `kv,query`). Non-critical services still appear in
-  the JSON for observability.
-- There is no `DEGRADED` in the SDK path (the SDK cannot see failover state). Tolerance
-  of transient blips lives in the consumer via `FailoverDelay`, not in the snapshot.
-- `GET /health/couchbase` returns the detailed JSON report: HTTP 200 when global is UP,
-  HTTP 503 when DOWN. `GET /healthz` is a static liveness probe.
+- The **global** status is `DOWN` if any critical service is DOWN (or not observed),
+  `DEGRADED` if every critical service is UP but a non-critical service is DOWN, else
+  `UP`. `critical` is per-app config (e.g. `kv`, or `kv,query`). Non-critical services
+  still appear in the JSON for observability.
+- `DEGRADED` counts as healthy: it never starts the failover timer. The SDK cannot see
+  failover state, so tolerance of transient blips lives in the consumer via
+  `FailoverDelay`, not in the snapshot.
+- `GET /health/couchbase` returns the detailed JSON report: HTTP 200 when global is UP
+  or DEGRADED, HTTP 503 when DOWN. `GET /healthz` is a static liveness probe.
 
-Example body:
+Example body (`reachable` is a count of reachable endpoints, `unreachable` lists the
+hosts with a failing endpoint):
 
 ```json
 {
   "status": "UP",
   "critical": ["kv"],
   "services": {
-    "kv":    {"status": "UP", "reachable": ["cb-data-1.local:11210"], "unreachable": []},
-    "query": {"status": "UP", "reachable": ["cb-index-query-1.local:8093"], "unreachable": []}
+    "kv":    {"status": "UP", "reachable": 1, "unreachable": []},
+    "query": {"status": "UP", "reachable": 1, "unreachable": []}
   },
+  "reason": "all critical services reachable",
   "checkedAt": "2026-06-22T12:00:00Z"
 }
 ```
@@ -339,9 +343,11 @@ kubectl logs deployment/observer --tail=50
 kind delete cluster --name "$KIND"
 ```
 
-> Cold-start guard: the observer only arms a switch after it has seen the cluster
-> healthy at least once. An observer that boots into an already-down primary (e.g. a
-> pod reschedule during an outage) will not auto-fail-over on cold start.
+> Cold start: at boot the observer reads the target ConfigMaps. If they already hold
+> the secondary connection string it adopts the switched state (`adopt_switched`): no
+> second switch, no roll. If only some do (`adopt_mixed`), the switch stays pending. An
+> observer that boots into an already-down primary with the ConfigMaps still on the
+> primary switches after `FailoverDelay`, like a warm one.
 
 ## Tests
 
@@ -363,7 +369,7 @@ Each stack is isolated: `compose` only touches Docker Compose, `kind` only its o
 
 ```text
 pkg/svchealth/        SDK per-service health detector (types, prober, Compute, HTTP handler)
-pkg/state/            anti-flap state machine (FailoverDelay, cold-start arm gate)
+pkg/state/            anti-flap state machine (FailoverDelay, adopted switched state)
 pkg/actuator/         Kubernetes actuator (ConfigMap swap + rollout-restart)
 pkg/event/            parse the SNS-wrapped CloudWatch alarm (switch Lambda)
 pkg/switchhandler/    actuate the switch only on ALARM, reusing pkg/actuator (switch Lambda)
