@@ -73,4 +73,19 @@ class Architecture(unittest.TestCase):
         for c in self.objects('CouchbaseCluster'):
             self.assertEqual(c['spec']['cluster']['dataServiceMemoryQuota'],'2Gi')
             self.assertEqual(c['spec']['cluster']['indexServiceMemoryQuota'],'512Mi')
+    def test_envoy_admin_is_loopback_only(self):
+        config=next(d for d in self.objects('ConfigMap') if d['metadata']['name']=='envoy-config')
+        e=yaml.safe_load(config['data']['envoy.yaml'])
+        self.assertEqual(e['admin']['address']['socket_address']['address'],'127.0.0.1')
+        service=next(s for s in self.objects('Service') if s['metadata']['name']=='envoy')
+        self.assertEqual([p['name'] for p in service['spec']['ports']],['grpc'])
+        envoy=next(c for d in self.objects('Deployment') for c in d['spec']['template']['spec']['containers'] if c['name']=='envoy')
+        self.assertEqual([p['name'] for p in envoy['ports']],['grpc'])
+        probe=envoy['readinessProbe'];self.assertNotIn('httpGet',probe)
+        self.assertEqual(probe['exec']['command'][-2:],['/ready','9901'])
+        import sys;sys.path.insert(0,str(ROOT/'deploy/aws/cng-demo/scripts'));import runner
+        self.assertEqual(probe['exec']['command'][2],runner.ENVOY_ADMIN_GET)
+    def test_couchbase_console_is_not_exposed(self):
+        for c in self.objects('CouchbaseCluster'):
+            self.assertNotIn('exposeAdminConsole',c['spec'].get('networking',{}))
 if __name__=='__main__':unittest.main()

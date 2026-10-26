@@ -48,6 +48,8 @@ hack/cng-aws-demo.sh --destroy --profile <profile>
 
 `--reset` is an explicit operator action. It exports evidence before changing the test state. It is not automatic crash recovery. `--park` hibernates the databases and scales workers to zero. EKS, NAT and storage charges continue. `--destroy` exports workload evidence, removes the Kubernetes resources and PVCs, removes the Terraform resources, and checks the owned resource inventory. Local evidence remains. Destruction must be explicitly authorized when an agent executes it.
 
+No admin endpoint is exposed in the cluster. Envoy admin listens on `127.0.0.1:9901` inside the Envoy pod, and the `envoy` Service publishes only the gRPC port. The databases have no console NodePort. For manual inspection, use a port-forward from the operator workstation, for example `kubectl -n cng-demo port-forward deploy/envoy 19901:9901` or `kubectl -n cb-a port-forward pod/<pod> 8091:8091`.
+
 `--name` can select a separate name that starts with `cng-demo`. `--region` defaults to `eu-west-1`. Local ownership records prevent cross-account actions and adoption of an existing cluster without state. Do not delete the private state directory while AWS resources remain.
 
 ## Verification and evidence

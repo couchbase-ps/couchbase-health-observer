@@ -55,8 +55,6 @@ spec:
     indexStorageSetting: plasma
     autoFailoverTimeout: 30s
     autoFailoverMaxCount: 100
-  networking:
-    exposeAdminConsole: true
   volumeClaimTemplates:
   - metadata:
       name: data

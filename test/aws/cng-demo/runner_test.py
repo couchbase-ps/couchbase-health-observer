@@ -17,4 +17,28 @@ class RunnerContracts(unittest.TestCase):
     def test_endpoint_metrics_are_attributed_to_each_gateway(self):
         text='cng_cluster::10.0.1.1:18098::cx_total::3\ncng_cluster::10.0.1.2:18098::cx_total::0\n'
         self.assertEqual(runner.connection_counts(text,['10.0.1.1','10.0.1.2']),{'10.0.1.1':3,'10.0.1.2':0})
+    def test_envoy_admin_is_read_inside_the_envoy_pod(self):
+        args=runner.envoy_admin_args('/clusters')
+        self.assertEqual(args[:6],['exec','-n','cng-demo','deployment/envoy','-c','envoy'])
+        self.assertEqual(args[-2:],['/clusters','9901'])
+    def test_envoy_admin_script_returns_decoded_body_only_for_200(self):
+        # Behaves like Envoy admin: rejects HTTP/1.0, answers HTTP/1.1 chunked.
+        import http.server,subprocess,threading
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version='HTTP/1.1'
+            def do_GET(self):
+                if self.request_version!='HTTP/1.1':self.send_response(426);self.send_header('Content-Length','0');self.end_headers();return
+                self.send_response(200 if self.path=='/clusters' else 503);self.send_header('Transfer-Encoding','chunked');self.end_headers()
+                for part in (b'cng_cluster::10.0.1.1:18098::health_fl',b'ags::healthy\n'):self.wfile.write(b'%x\r\n%s\r\n'%(len(part),part))
+                self.wfile.write(b'0\r\n\r\n')
+            def log_message(self,*a):pass
+        server=http.server.HTTPServer(('127.0.0.1',0),H);threading.Thread(target=server.serve_forever,daemon=True).start()
+        port=str(server.server_port)
+        try:
+            ok=subprocess.run(['bash','-c',runner.ENVOY_ADMIN_GET,'envoy-admin','/clusters',port],capture_output=True,timeout=10)
+            self.assertEqual(ok.returncode,0)
+            self.assertEqual(runner.envoy_admin_body(ok.stdout),'cng_cluster::10.0.1.1:18098::health_flags::healthy\n')
+            bad=subprocess.run(['bash','-c',runner.ENVOY_ADMIN_GET,'envoy-admin','/ready',port],capture_output=True,timeout=10)
+            self.assertNotEqual(bad.returncode,0);self.assertEqual(bad.stdout,b'')
+        finally:server.shutdown()
 if __name__=='__main__':unittest.main()

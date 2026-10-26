@@ -1,10 +1,29 @@
 #!/usr/bin/env python3
 """Kubernetes CNG scenarios with retained failures and unchanged measurement budgets."""
-import base64,csv,importlib.util,json,os,pathlib,re,subprocess,threading,time,urllib.parse
+import base64,csv,http.client,io,importlib.util,json,os,pathlib,re,subprocess,threading,time,urllib.parse
 from control import Kube,assert_gateways,gateway_identity,assert_gateway_identity,assert_fleet_connections,harness_job
 ROOT=pathlib.Path(__file__).resolve().parents[4]
 spec=importlib.util.spec_from_file_location('evidence',ROOT/'test/compose-cng/evidence.py')
 evidence=importlib.util.module_from_spec(spec);spec.loader.exec_module(evidence)
+
+# Envoy admin listens on loopback only; read it inside the Envoy pod. Args: path, port.
+# Envoy rejects HTTP/1.0 (426) and answers HTTP/1.1 chunked; envoy_admin_body decodes it.
+ENVOY_ADMIN_GET=r'''exec 3<>/dev/tcp/127.0.0.1/"$2" || exit 1
+printf 'GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' "$1" >&3
+IFS= read -r status <&3
+case "$status" in *" 200 "*) ;; *) exit 1;; esac
+printf '%s\n' "$status"
+cat <&3'''
+
+def envoy_admin_body(raw):
+    class Raw:
+        def makefile(self,*a,**k):return io.BytesIO(raw)
+    r=http.client.HTTPResponse(Raw());r.begin()
+    if r.status!=200:raise ValueError('Envoy admin returned '+str(r.status))
+    return r.read().decode()
+
+def envoy_admin_args(path):
+    return ['exec','-n','cng-demo','deployment/envoy','-c','envoy','--','bash','-c',ENVOY_ADMIN_GET,'envoy-admin',path,'9901']
 
 def query_success(response,expected=None):
     if response.get('status')!='success' or response.get('errors') or expected is not None and (response.get('results')!=expected or any(type(a) is not type(b) for a,b in zip(response.get('results',[]),expected))):
@@ -100,9 +119,9 @@ except Exception as e:print(json.dumps({'code':0,'error':str(e)}))
             if services!=expected:raise ValueError('backend service topology differs from approved plan')
     def observer(self,role):return self.http('http://observer-'+role+':8080/health/couchbase')
     def envoy(self):
-        r=self.http('http://envoy:9901/clusters')
-        if r['code']!=200:raise ValueError('Envoy admin unavailable')
-        return r['body']
+        p=subprocess.run(self.kube.prefix+envoy_admin_args('/clusters'),capture_output=True,timeout=20)
+        if p.returncode:raise ValueError('Envoy admin unavailable')
+        return envoy_admin_body(p.stdout)
     def gateway_pods(self):return self.kube.get('pods','cng-demo','app in (cng-a,cng-b)')
     def assert_no_crash(self):
         pods=self.gateway_pods();assert_gateways(pods,self.expected_gateway_removals)
