@@ -4,10 +4,18 @@ import hashlib,pathlib,platform,urllib.request,zipfile,shutil,subprocess,json
 def download(url,path):
     urllib.request.urlretrieve(url,path)
 
+def terraform_ok(binary):
+    """The infra requires Terraform >= 1.16, < 2.0."""
+    p=subprocess.run([binary,'version','-json'],capture_output=True,text=True)
+    if p.returncode:return False
+    major,minor=(int(x) for x in json.loads(p.stdout)['terraform_version'].split('.')[:2])
+    return major==1 and minor>=16
+
 def ensure_tools(root,terraform=None):
     folder=pathlib.Path(root)/'.demo-aws/tools';folder.mkdir(parents=True,exist_ok=True)
     system=platform.system().lower();arch={'arm64':'arm64','aarch64':'arm64','x86_64':'amd64'}[platform.machine()]
     tf=terraform or shutil.which('terraform')
+    if tf and not terraform and not terraform_ok(tf):tf=None
     if not tf:
         version='1.16.5';name=f'terraform_{version}_{system}_{arch}.zip';target=folder/'terraform';archive=folder/name
         download(f'https://releases.hashicorp.com/terraform/{version}/{name}',archive)

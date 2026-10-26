@@ -26,4 +26,11 @@ class Lifecycle(unittest.TestCase):
         d.aws=aws;d.tf=lambda *args,**kwargs:calls.append(args)
         with self.assertRaisesRegex(ValueError,'Elastic IP quota exhausted'):d.provision()
         self.assertEqual(calls,[])
+    def test_system_terraform_is_used_only_when_new_enough(self):
+        import os,tools
+        with tempfile.TemporaryDirectory() as folder:
+            for version,ok in [('1.15.1',False),('1.16.5',True),('2.0.0',False)]:
+                fake=pathlib.Path(folder)/('terraform-'+version)
+                fake.write_text('#!/bin/sh\necho \'{"terraform_version":"'+version+'"}\'\n');fake.chmod(0o755)
+                self.assertEqual(tools.terraform_ok(str(fake)),ok,version)
 if __name__=='__main__':unittest.main()
