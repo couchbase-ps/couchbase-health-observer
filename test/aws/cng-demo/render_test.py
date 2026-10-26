@@ -88,4 +88,9 @@ class Architecture(unittest.TestCase):
     def test_couchbase_console_is_not_exposed(self):
         for c in self.objects('CouchbaseCluster'):
             self.assertNotIn('exposeAdminConsole',c['spec'].get('networking',{}))
+    def test_server_image_passes_operator_crd_validation(self):
+        import re
+        # Pattern of CouchbaseCluster spec.image in Operator 2.9 (chart 2.93.0).
+        crd=r'^(.*?(:\d+)?/)?.*?/.*?(:.*?\d+\.\d+\.\d+.*|@sha256:[0-9a-f]{64})$'
+        for c in self.objects('CouchbaseCluster'):self.assertRegex(c['spec']['image'],crd)
 if __name__=='__main__':unittest.main()

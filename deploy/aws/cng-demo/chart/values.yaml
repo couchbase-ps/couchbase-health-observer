@@ -1,5 +1,5 @@
 # Demo-only: isolated clusters, small workloads, no XDCR.
-serverImage: couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
+serverImage: docker.io/library/couchbase:enterprise-8.0.3@sha256:db0e1cdcaf4bf4a86f7ba65857c4693ac3b5600900ec59e796fac8e75ee5293d
 cngImage: couchbase/cloud-native-gateway:1.2.1@sha256:a97b198fa7ba7bdfd3cf0251ea2229ce70020d416516dbd361dcd8431b5b16cf
 observerImage: ghcr.io/couchbase-ps/couchbase-health-observer:0.5.0
 harnessImage: example.com/harness:build-required
