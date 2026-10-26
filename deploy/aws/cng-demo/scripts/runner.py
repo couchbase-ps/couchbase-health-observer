@@ -25,6 +25,10 @@ def envoy_admin_body(raw):
 def envoy_admin_args(path):
     return ['exec','-n','cng-demo','deployment/envoy','-c','envoy','--','bash','-c',ENVOY_ADMIN_GET,'envoy-admin',path,'9901']
 
+def pods_with_service(pods,service):
+    # Operator 2.9 marks each enabled service as couchbase_service_<name>=enabled.
+    return sorted([p for p in pods if p['metadata']['labels'].get('couchbase_service_'+service)=='enabled'],key=lambda p:p['metadata']['name'])
+
 def query_success(response,expected=None):
     if response.get('status')!='success' or response.get('errors') or expected is not None and (response.get('results')!=expected or any(type(a) is not type(b) for a,b in zip(response.get('results',[]),expected))):
         raise ValueError('query did not return required successful result')
@@ -86,7 +90,7 @@ except Exception as e:print(json.dumps({'code':0,'error':str(e)}))
         return json.loads(self.kube.exec(code,(url,statement or '',str(auth).lower()),timeout=20))
     def query(self,role,statement,expected=None):
         pods=self.backend_pods(role)
-        host=next(p['status']['podIP'] for p in pods if 'query' in p['metadata']['labels'].get('couchbase_services','') or p['metadata']['labels'].get('couchbase_server') in ('query','all'))
+        host=next(p['status']['podIP'] for p in pods_with_service(pods,'query') if p.get('status',{}).get('podIP'))
         response=self.http('http://'+host+':8093/query/service',statement,True)
         if response['code']!=200:raise ValueError('query transport failed: HTTP'+str(response['code']))
         result=json.loads(response['body']);query_success(result,expected);return result
@@ -264,8 +268,7 @@ print(p.stdout+p.stderr,end='');sys.exit(p.returncode)
         c=self.kube.get('couchbasecluster/cb-'+role,'cb-'+role)
         if not c['spec'].get('paused'):raise ValueError('Operator did not pause')
     def data_pods(self,role):
-        pods=self.backend_pods(role)
-        return sorted([p for p in pods if p['metadata']['labels'].get('couchbase_server') in ('data','all')],key=lambda p:p['metadata']['name'])
+        return pods_with_service(self.backend_pods(role),'data')
     def delete_backends(self,role,pods):
         self.pause(role)
         names=[p['metadata']['name'] for p in pods]

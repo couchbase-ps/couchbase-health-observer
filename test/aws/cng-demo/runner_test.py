@@ -41,4 +41,14 @@ class RunnerContracts(unittest.TestCase):
             bad=subprocess.run(['bash','-c',runner.ENVOY_ADMIN_GET,'envoy-admin','/ready',port],capture_output=True,timeout=10)
             self.assertNotEqual(bad.returncode,0);self.assertEqual(bad.stdout,b'')
         finally:server.shutdown()
+    def test_service_selection_uses_operator_labels(self):
+        # Labels as Operator 2.9 sets them on a live EKS install.
+        def pod(name,conf,*services):
+            labels={'app':'couchbase','couchbase_cluster':'cb-a','couchbase_node':name,'couchbase_node_conf':conf,'couchbase_server':'true'}
+            labels.update({'couchbase_service_'+s:'enabled' for s in services})
+            return {'metadata':{'name':name,'labels':labels},'status':{'podIP':'10.0.0.'+name[-1]}}
+        pods=[pod('cb-a-0001','data','data'),pod('cb-a-0000','data','data'),pod('cb-a-0003','query','index','query')]
+        self.assertEqual([p['metadata']['name'] for p in runner.pods_with_service(pods,'data')],['cb-a-0000','cb-a-0001'])
+        self.assertEqual([p['metadata']['name'] for p in runner.pods_with_service(pods,'query')],['cb-a-0003'])
+        self.assertEqual(runner.pods_with_service([pod('cb-b-0000','all','data','index','query')],'query')[0]['metadata']['name'],'cb-b-0000')
 if __name__=='__main__':unittest.main()
