@@ -93,4 +93,10 @@ class Architecture(unittest.TestCase):
         # Pattern of CouchbaseCluster spec.image in Operator 2.9 (chart 2.93.0).
         crd=r'^(.*?(:\d+)?/)?.*?/.*?(:.*?\d+\.\d+\.\d+.*|@sha256:[0-9a-f]{64})$'
         for c in self.objects('CouchbaseCluster'):self.assertRegex(c['spec']['image'],crd)
+    def test_cpu_quantities_are_canonical_for_server_side_apply(self):
+        # The Operator rewrites 0.25 to 250m and owns the field; any other
+        # spelling makes the next helm upgrade conflict.
+        for c in self.objects('CouchbaseCluster'):
+            self.assertEqual(c['spec']['autoResourceAllocation']['cpuRequests'],'250m')
+            self.assertEqual(c['spec']['autoResourceAllocation']['cpuLimits'],'1')
 if __name__=='__main__':unittest.main()

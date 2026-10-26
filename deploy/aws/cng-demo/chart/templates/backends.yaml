@@ -39,7 +39,7 @@ spec:
     adminSecret: cb-admin
   autoResourceAllocation:
     enabled: true
-    cpuRequests: "0.25"
+    cpuRequests: 250m
     cpuLimits: "1"
     overheadPercent: 25
   buckets:
